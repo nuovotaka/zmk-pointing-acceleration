@@ -181,8 +181,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * cfg->y_aspect_scale / 1000);
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
-        input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
-        input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_NO_WAIT);
+        // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
+        // input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_NO_WAIT);
 
         // 端数処理
         if (cfg->track_remainders) {
