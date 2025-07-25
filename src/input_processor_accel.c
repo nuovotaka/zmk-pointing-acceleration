@@ -19,7 +19,7 @@
 #define ASPECT_RATIO_Y_SCALE 1.2f // 例: 16:9や21:9の横長画面なら1.1〜1.5など好みで調整
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
-#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 1.0f
+#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 1200
 #endif
 
 struct accel_config {
@@ -211,7 +211,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
         // 加速値の計算
         int32_t accelerated_x = (dx * factor) / 1000;
-        int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * ASPECT_RATIO_Y_SCALE);
+        int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE / 1000);
 
         // デバッグ出力
         printk("dx=%4d dy=%4d -> ax=%4d ay=%4d factor=%d speed=%d\n",
