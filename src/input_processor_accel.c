@@ -10,12 +10,11 @@
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
 #define ACCEL_MAX_CODES 4
-// Kconfigで定義した値を使う
+
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
 #define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
 #endif
 
-// 加速度設定構造体（DTSから取得）
 struct accel_config {
     uint8_t input_type;
     const uint16_t *codes;
@@ -33,7 +32,6 @@ struct accel_data {
     int64_t last_time;
     int16_t remainders[ACCEL_MAX_CODES];
 
-    // ペア処理用
     int32_t pending_x;
     int32_t pending_y;
     int64_t pending_x_time;
@@ -42,7 +40,11 @@ struct accel_data {
     bool has_pending_y;
 };
 
-// インスタンス生成時にKconfig値を使う
+static int accel_handle_event(const struct device *dev, struct input_event *event,
+                             uint32_t param1, uint32_t param2,
+                             struct zmk_input_processor_state *state);
+
+
 #define ACCEL_INST_INIT(inst)                                                  \
 static const uint16_t accel_codes_##inst[] = { INPUT_REL_X, INPUT_REL_Y };     \
 static const struct accel_config accel_config_##inst = {                       \
