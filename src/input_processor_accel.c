@@ -32,6 +32,7 @@ struct accel_config {
     uint32_t speed_threshold;            /* Speed (counts per second) at which factor reaches 1.0 */
     uint32_t speed_max;                  /* Speed (counts per second) at which factor reaches max_factor */
     uint8_t  acceleration_exponent;      /* Exponent for acceleration curve (1=linear, 2=quadratic, etc.) */
+    uint8_t  pair_window_ms;
 };
 
 /* Runtime state for each instance (mutable data) */
