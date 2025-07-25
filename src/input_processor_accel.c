@@ -3,6 +3,7 @@
 #include <zephyr/input/input.h>
 #include <zephyr/sys/printk.h>
 #include <math.h>
+#include <drivers/input_processor.h>
 
 
 #define DT_DRV_COMPAT zmk_input_processor_acceleration
