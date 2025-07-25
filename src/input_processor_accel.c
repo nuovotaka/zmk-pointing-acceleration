@@ -178,7 +178,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
 
-        int32_t accelerated_y = (int32_t)((dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
+        int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
         // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
@@ -187,7 +187,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // 端数処理
         if (cfg->track_remainders) {
             int32_t rem_x = ((dx * factor) % 1000) / 100;
-            int32_t rem_y = (((dy * factor * cfg->y_aspect_scale) / 1000) % 1000) / 100;
+            int32_t rem_y = (int32_t)((((int64_t)dy * factor * cfg->y_aspect_scale) / 1000) % 1000) / 100;
             data->remainders[0] += rem_x;
             data->remainders[1] += rem_y;
             if (abs(data->remainders[0]) >= 10) {
@@ -260,14 +260,14 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // Y軸の場合はアスペクト比スケーリングを適用
     if (event->code == INPUT_REL_Y) {
         int32_t original_value = accelerated_value;
-        accelerated_value = (accelerated_value * cfg->y_aspect_scale) / 1000;
-        // printk("Y-axis scaling: original=%d, scale=%d, result=%d\n", 
-        //        original_value, cfg->y_aspect_scale, accelerated_value);
+        accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
+        printk("Y-axis scaling: original=%d, scale=%d, result=%d\n", 
+               original_value, cfg->y_aspect_scale, accelerated_value);
     }
 
     // 端数処理
     if (cfg->track_remainders && code_index < ACCEL_MAX_CODES) {
-        int32_t base_calculation = event->value * factor;
+        int64_t base_calculation = (int64_t)event->value * factor;
         if (event->code == INPUT_REL_Y) {
             base_calculation = (base_calculation * cfg->y_aspect_scale) / 1000;
         }
