@@ -1,6 +1,5 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zmk/input.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/toolchain.h>
 #include <drivers/input_processor.h>
@@ -13,6 +12,9 @@
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
 #define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
 #endif
+
+#define MY_EVENT_QUEUE_SIZE 8
+K_MSGQ_DEFINE(my_input_event_queue, sizeof(struct input_event), MY_EVENT_QUEUE_SIZE, 4);
 
 /* Forward declaration of the event handler */
 static int accel_handle_event(const struct device *dev, struct input_event *event,
@@ -83,6 +85,20 @@ DEVICE_DT_INST_DEFINE(inst,                                                    \
 
 /* Instantiate for each DT node matching our compatible */
 DT_INST_FOREACH_STATUS_OKAY(ACCEL_INST_INIT)
+
+int input_processor_forward_event(const struct device *dev,
+                                 struct input_event *event,
+                                 uint32_t param1,
+                                 uint32_t param2,
+                                 struct zmk_input_processor_state *state) {
+    ARG_UNUSED(dev);
+    ARG_UNUSED(param1);
+    ARG_UNUSED(param2);
+    ARG_UNUSED(state);
+
+    // Zephyrのメッセージキューにイベントをput
+    return k_msgq_put(&my_input_event_queue, event, K_NO_WAIT);
+}
 
 /* Event handler implementation */
 static int accel_handle_event(const struct device *dev, struct input_event *event,
@@ -199,13 +215,13 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         struct input_event out_x = *event;
         out_x.code = INPUT_REL_X;
         out_x.value = accelerated_x;
-        zmk_input_event_queue_put(&out_x);
+        input_processor_forward_event(dev, &out_x, param1, param2, state);
 
         // Yイベント生成
         struct input_event out_y = *event;
         out_y.code = INPUT_REL_Y;
         out_y.value = accelerated_y;
-        zmk_input_event_queue_put(&out_y);
+        input_processor_forward_event(dev, &out_y, param1, param2, state);
 
         // 状態クリア
         data->has_pending_x = false;
