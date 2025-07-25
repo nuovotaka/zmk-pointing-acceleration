@@ -37,6 +37,10 @@ struct accel_data {
     int32_t last_phys_dy;                /* Last physical Y delta (for direction check) */
     uint16_t last_code;                  /* Last event code processed (e.g. REL_X or REL_Y) */
     int16_t remainders[ACCEL_MAX_CODES]; /* Remainder values for fractional movements per code */
+    int32_t pending_dx;                  /* Pending X movement for paired processing */
+    int32_t pending_dy;                  /* Pending Y movement for paired processing */
+    bool has_pending_x;                  /* Flag for pending X event */
+    bool has_pending_y;                  /* Flag for pending Y event */
 };
 
 /* Populate config and data for each instance from devicetree */
@@ -109,15 +113,56 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     /* Get current timestamp */
     int64_t current_time = k_uptime_get();
-    
-    /* Calculate time delta and speed */
     int64_t time_delta = current_time - data->last_time;
+    
+    /* Store current movement for direction-aware processing */
+    if (event->code == INPUT_REL_X) {
+        data->pending_dx = event->value;
+        data->has_pending_x = true;
+    } else if (event->code == INPUT_REL_Y) {
+        data->pending_dy = event->value;
+        data->has_pending_y = true;
+    }
+    
+    /* Calculate movement magnitude considering recent paired movements */
+    int32_t dx = event->code == INPUT_REL_X ? event->value : data->last_phys_dx;
+    int32_t dy = event->code == INPUT_REL_Y ? event->value : data->last_phys_dy;
+    
+    /* Use combined movement if recent paired movement exists (within 10ms) */
+    if (time_delta < 10) {
+        if (event->code == INPUT_REL_X && data->has_pending_y) {
+            dy = data->pending_dy;
+        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
+            dx = data->pending_dx;
+        }
+    }
+    
+    /* Calculate combined movement magnitude for more accurate speed */
+    uint32_t magnitude_squared = (uint32_t)(dx * dx + dy * dy);
+    uint32_t magnitude = 0;
+    
+    /* Simple integer square root approximation */
+    if (magnitude_squared > 0) {
+        uint32_t x = magnitude_squared;
+        uint32_t y = (x + 1) / 2;
+        while (y < x) {
+            x = y;
+            y = (x + magnitude_squared / x) / 2;
+        }
+        magnitude = x;
+    }
+    
+    /* Fallback to single-axis magnitude if combined is zero */
+    if (magnitude == 0) {
+        magnitude = abs(event->value);
+    }
+    
     if (time_delta <= 0) {
         time_delta = 1; /* Avoid division by zero */
     }
     
-    /* Calculate speed in counts per second */
-    uint32_t speed = (abs(event->value) * 1000) / time_delta;
+    /* Calculate speed based on movement magnitude */
+    uint32_t speed = (magnitude * 1000) / time_delta;
     
     /* Calculate acceleration factor based on speed */
     uint16_t factor = cfg->min_factor;
@@ -149,12 +194,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
     
-    /* Apply acceleration factor */
+    /* Apply acceleration factor to current event */
     int32_t accelerated_value = (event->value * factor) / 1000;
     
     /* Handle remainders if enabled */
     if (cfg->track_remainders && code_index < ACCEL_MAX_CODES) {
-        int32_t remainder = ((event->value * factor) % 1000) / 100; /* Scale to avoid overflow */
+        int32_t remainder = ((event->value * factor) % 1000) / 100;
         data->remainders[code_index] += remainder;
         
         /* Add accumulated remainder to output */
