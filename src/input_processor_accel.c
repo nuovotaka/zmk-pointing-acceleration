@@ -2,7 +2,6 @@
 #include <zephyr/device.h>
 #include <zephyr/input/input.h>
 #include <zephyr/sys/printk.h>
-#include <zephyr/autoconf.h>
 #include <math.h>
 
 
