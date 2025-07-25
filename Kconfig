@@ -14,7 +14,6 @@ config INPUT_PROCESSOR_ACCELERATION_INIT_PRIORITY
     default 90
     depends on ZMK_INPUT_PROCESSOR_ACCELERATION
 
-# Kconfig
 config INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
     int "Input processor acceleration pair window (ms)"
     default 10
@@ -24,7 +23,7 @@ config INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
 
 config INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
     int "Y axis aspect ratio scale (scaled by 1000, e.g. 1200 = 1.2x)"
-    default 1200
+    default 1500
     depends on ZMK_INPUT_PROCESSOR_ACCELERATION
     help
       Scale factor for Y axis movement to adjust for screen aspect ratio.

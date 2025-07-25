@@ -15,9 +15,6 @@
 #define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 10
 #endif
 
-// 必要に応じてDTSやKconfigで設定できるようにしてもOK
-#define ASPECT_RATIO_Y_SCALE 1.2f // 例: 16:9や21:9の横長画面なら1.1〜1.5など好みで調整
-
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
 #define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 1200
 #endif
@@ -33,6 +30,7 @@ struct accel_config {
     uint32_t speed_max;
     uint8_t  acceleration_exponent;
     uint8_t  pair_window_ms;
+    uint16_t y_aspect_scale;
 };
 
 struct accel_data {
@@ -71,7 +69,8 @@ static const struct accel_config accel_config_##inst = {                       \
     .speed_threshold = 1000,                                                   \
     .speed_max = 6000,                                                         \
     .acceleration_exponent = 2,                                                \
-    .pair_window_ms = CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS              \
+    .pair_window_ms = CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS,             \
+    .y_aspect_scale = CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE              \
 };                                                                             \
 static struct accel_data accel_data_##inst = {0};                              \
 DEVICE_DT_INST_DEFINE(inst,                                                    \
@@ -176,56 +175,10 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-    void process_motion_with_acceleration(int16_t dx, int16_t dy, const struct device *dev, const struct accel_config *cfg)
-    {
-        int64_t now = k_uptime_get();
-        static int64_t accel_last_time = 0;
-        int64_t dt = now - accel_last_time;
-        if (dt <= 0) dt = 1;
-        accel_last_time = now;
-
-        // 合成速度の計算
-        uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
-        uint32_t speed = (magnitude * 1000) / dt;
-
-        // 加速度ファクターの決定
-        uint16_t factor = cfg->min_factor;
-        if (speed > cfg->speed_threshold) {
-            if (speed >= cfg->speed_max) {
-                factor = cfg->max_factor;
-            } else {
-                uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-                uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-                uint32_t speed_offset = speed - cfg->speed_threshold;
-                uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
-                uint32_t accelerated_speed = normalized_speed;
-                if (cfg->acceleration_exponent == 2) {
-                    accelerated_speed = (normalized_speed * normalized_speed) / 1000;
-                } else if (cfg->acceleration_exponent == 3) {
-                    accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
-                }
-                factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
-                if (factor > cfg->max_factor) factor = cfg->max_factor;
-            }
-        }
-
-        // 加速値の計算
-        int32_t accelerated_x = (dx * factor) / 1000;
-        int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE / 1000);
-
-        // デバッグ出力
-        printk("dx=%4d dy=%4d -> ax=%4d ay=%4d factor=%d speed=%d\n",
-            dx, dy, accelerated_x, accelerated_y, factor, speed);
-
-        // X/Yイベントを発行
-        input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_FOREVER);
-        input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_FOREVER);
-    }
-
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
 
-        int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE);
+        int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * cfg->y_aspect_scale / 1000);
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
         input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_FOREVER);
