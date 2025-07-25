@@ -93,12 +93,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     const struct accel_config *cfg = dev->config;
     struct accel_data *data = dev->data;
 
-    /* Process only events of the specified type */
-    if (event->type != cfg->input_type) {
-        return 0;
-    }
+    if (event->type != cfg->input_type) return 0;
 
-    /* Process only the specified event codes */
+    // コード判定
     bool code_matched = false;
     uint32_t code_index = 0;
     for (uint32_t i = 0; i < cfg->codes_count; ++i) {
@@ -108,23 +105,13 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             break;
         }
     }
-    if (!code_matched) {
-        return 0;
-    }
+    if (!code_matched) return 0;
+    if (event->value == 0) return 0;
+    if (code_index >= ACCEL_MAX_CODES) return 0;
 
-        /* Skip zero-value events */
-    if (event->value == 0) {
-        return 0;
-    }
-
-    /* Validate code_index bounds */
-    if (code_index >= ACCEL_MAX_CODES) {
-        return 0;
-    }
-
-    /* Get current timestamp */
     int64_t current_time = k_uptime_get();
-    
+
+    // ペンディングに格納
     if (event->code == INPUT_REL_X) {
         data->pending_x = event->value;
         data->pending_x_time = current_time;
@@ -134,10 +121,10 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         data->pending_y_time = current_time;
         data->has_pending_y = true;
     }
-    
+
+    // ペア判定
     bool has_pair = false;
     int32_t dx = 0, dy = 0;
-    
     if (data->has_pending_x && data->has_pending_y) {
         int64_t time_diff = abs(data->pending_x_time - data->pending_y_time);
         if (time_diff <= cfg->pair_window_ms) {
@@ -146,21 +133,14 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             dy = data->pending_y;
         }
     }
-    
-    /* Calculate acceleration factor based on speed */
-    uint16_t factor = cfg->min_factor;
-    
-    if (has_pair && !data->factor_ready) {
+
+    if (has_pair) {
+        // ペア時の加速度計算
         int64_t time_delta = current_time - data->last_time;
-        if (time_delta <= 0) {
-            time_delta = 1;
-        }
-        
-        /* Calculate combined magnitude */
+        if (time_delta <= 0) time_delta = 1;
+
         uint32_t magnitude_squared = (uint32_t)(dx * dx + dy * dy);
         uint32_t magnitude = 0;
-        
-        /* Simple integer square root */
         if (magnitude_squared > 0) {
             uint32_t x = magnitude_squared;
             uint32_t y = (x + 1) / 2;
@@ -170,52 +150,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
             magnitude = x;
         }
-        
         uint32_t speed = (magnitude * 1000) / time_delta;
-    
-    if (speed > cfg->speed_threshold) {
-        if (speed >= cfg->speed_max) {
-            factor = cfg->max_factor;
-        } else {
-            /* Interpolate between min and max factor based on speed */
-            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-            uint32_t speed_offset = speed - cfg->speed_threshold;
-            
-            /* Apply acceleration exponent */
-            uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
-            uint32_t accelerated_speed = normalized_speed;
-            
-            /* Simple exponent implementation for common cases */
-            if (cfg->acceleration_exponent == 2) {
-                accelerated_speed = (normalized_speed * normalized_speed) / 1000;
-            } else if (cfg->acceleration_exponent == 3) {
-                accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
-            }
-            
-            factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
-            if (factor > cfg->max_factor) {
-                factor = cfg->max_factor;
-                }
-            }
-        }
-        
-        /* Cache factor for both axes */
-        data->shared_factor = factor;
-        data->factor_ready = true;
-        
-    } else if (data->factor_ready) {
-        /* Use cached factor for paired processing */
-        factor = data->shared_factor;
-    } else {
-        /* Single axis processing */
-        int64_t time_delta = current_time - data->last_time;
-        if (time_delta <= 0) {
-            time_delta = 1;
-        }
-        
-        uint32_t speed = (abs(event->value) * 1000) / time_delta;
-        
+
+        uint16_t factor = cfg->min_factor;
         if (speed > cfg->speed_threshold) {
             if (speed >= cfg->speed_max) {
                 factor = cfg->max_factor;
@@ -223,48 +160,105 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
                 uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
                 uint32_t factor_range = cfg->max_factor - cfg->min_factor;
                 uint32_t speed_offset = speed - cfg->speed_threshold;
-                
                 uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
                 uint32_t accelerated_speed = normalized_speed;
-                
                 if (cfg->acceleration_exponent == 2) {
                     accelerated_speed = (normalized_speed * normalized_speed) / 1000;
                 } else if (cfg->acceleration_exponent == 3) {
                     accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
                 }
-                
                 factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
-                if (factor > cfg->max_factor) {
-                    factor = cfg->max_factor;
-                }
+                if (factor > cfg->max_factor) factor = cfg->max_factor;
             }
         }
+
+        // X/Y両方の加速値を計算
+        int32_t accelerated_x = (dx * factor) / 1000;
+        int32_t accelerated_y = (dy * factor) / 1000;
+
+        // 端数処理（必要なら）
+        if (cfg->track_remainders) {
+            int32_t rem_x = ((dx * factor) % 1000) / 100;
+            int32_t rem_y = ((dy * factor) % 1000) / 100;
+            data->remainders[0] += rem_x;
+            data->remainders[1] += rem_y;
+            if (abs(data->remainders[0]) >= 10) {
+                int32_t r = data->remainders[0] / 10;
+                accelerated_x += r;
+                data->remainders[0] -= r * 10;
+            }
+            if (abs(data->remainders[1]) >= 10) {
+                int32_t r = data->remainders[1] / 10;
+                accelerated_y += r;
+                data->remainders[1] -= r * 10;
+            }
+        }
+
+        // Xイベント生成
+        struct input_event out_x = *event;
+        out_x.code = INPUT_REL_X;
+        out_x.value = accelerated_x;
+        input_processor_forward_event(dev, &out_x, param1, param2, state);
+
+        // Yイベント生成
+        struct input_event out_y = *event;
+        out_y.code = INPUT_REL_Y;
+        out_y.value = accelerated_y;
+        input_processor_forward_event(dev, &out_y, param1, param2, state);
+
+        // 状態クリア
+        data->has_pending_x = false;
+        data->has_pending_y = false;
+        data->factor_ready = false;
+        data->last_time = current_time;
+        data->last_code = 0;
+        data->last_phys_dx = dx;
+        data->last_phys_dy = dy;
+
+        // 既に両方出力したので、元のeventは処理しない
+        return 1;
     }
-    
-    /* Apply acceleration factor */
+
+    // --- ここから単独軸の加速度処理 ---
+    // ペアでなければ従来通り単独軸処理
+    int64_t time_delta = current_time - data->last_time;
+    if (time_delta <= 0) time_delta = 1;
+
+    uint32_t speed = (abs(event->value) * 1000) / time_delta;
+    uint16_t factor = cfg->min_factor;
+    if (speed > cfg->speed_threshold) {
+        if (speed >= cfg->speed_max) {
+            factor = cfg->max_factor;
+        } else {
+            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
+            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
+            uint32_t speed_offset = speed - cfg->speed_threshold;
+            uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
+            uint32_t accelerated_speed = normalized_speed;
+            if (cfg->acceleration_exponent == 2) {
+                accelerated_speed = (normalized_speed * normalized_speed) / 1000;
+            } else if (cfg->acceleration_exponent == 3) {
+                accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
+            }
+            factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
+            if (factor > cfg->max_factor) factor = cfg->max_factor;
+        }
+    }
+
     int32_t accelerated_value = (event->value * factor) / 1000;
-    
-    /* Handle remainders if enabled */
+
+    // 端数処理
     if (cfg->track_remainders && code_index < ACCEL_MAX_CODES) {
-        int32_t remainder = ((event->value * factor) % 1000) / 100; /* Scale to avoid overflow */
+        int32_t remainder = ((event->value * factor) % 1000) / 100;
         data->remainders[code_index] += remainder;
-        
-        /* Add accumulated remainder to output */
         if (abs(data->remainders[code_index]) >= 10) {
             int32_t remainder_contribution = data->remainders[code_index] / 10;
             accelerated_value += remainder_contribution;
             data->remainders[code_index] -= remainder_contribution * 10;
         }
     }
-    
-    /* Clear pending flags after processing both axes */
-    if (has_pair) {
-        data->has_pending_x = false;
-        data->has_pending_y = false;
-        data->factor_ready = false;
-    }
-    
-    /* Update tracking data */
+
+    // 状態更新
     data->last_time = current_time;
     data->last_code = event->code;
     if (event->code == INPUT_REL_X) {
@@ -272,8 +266,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     } else if (event->code == INPUT_REL_Y) {
         data->last_phys_dy = event->value;
     }
-    
-    /* Update event value with accelerated result */
+
+    // 加速値をeventに反映
     event->value = accelerated_value;
 
     return 0;
