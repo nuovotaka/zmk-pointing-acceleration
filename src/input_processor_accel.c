@@ -202,16 +202,24 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-        // X/Y両方のイベントを生成してforward（ZMK流ならinput_processor_forward_event等で）
+        // X/Y両方のイベントを生成してforward
         struct input_event out_x = *event;
         out_x.code = INPUT_REL_X;
         out_x.value = accelerated_x;
-        input_processor_forward_event(dev, &out_x, param1, param2, state);
+        int ret_x = input_processor_forward_event(dev, &out_x, param1, param2, state);
+        if (ret_x == 1) {
+            // チェーンの最後なので自分でOSに送信
+            input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
+        }
 
         struct input_event out_y = *event;
         out_y.code = INPUT_REL_Y;
         out_y.value = accelerated_y;
-        input_processor_forward_event(dev, &out_y, param1, param2, state);
+        int ret_y = input_processor_forward_event(dev, &out_y, param1, param2, state);
+        if (ret_y == 1) {
+            input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_FOREVER);
+        }
+
 
         // 状態クリア
         data->has_pending_x = false;
@@ -265,6 +273,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     // 加速値をeventに反映
     event->value = accelerated_value;
+
+    int ret = input_processor_forward_event(dev, event, param1, param2, state);
+    if (ret == 1) {
+        input_report_rel(dev, event->code, event->value, true, K_FOREVER);
+    }
 
     return 0;
 }
