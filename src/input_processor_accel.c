@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/toolchain.h>
 #include <drivers/input_processor.h>
@@ -23,6 +24,38 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
 /* Maximum number of event codes this processor can handle (e.g. REL_X, REL_Y). */
 #define ACCEL_MAX_CODES 4
+
+extern struct k_msgq my_input_event_queue;
+
+void event_consumer_thread(void)
+{
+    struct input_event evt;
+    while (1) {
+        int ret = k_msgq_get(&my_input_event_queue, &evt, K_FOREVER);
+        if (ret == 0) {
+            process_input_event(&evt); // 下で定義
+        }
+    }
+}
+
+K_THREAD_DEFINE(event_consumer_tid, 1024, event_consumer_thread, NULL, NULL, NULL, 5, 0, 0);
+
+// 仮想カーソル座標
+static int32_t cursor_x = 0;
+static int32_t cursor_y = 0;
+
+void process_input_event(const struct input_event *evt)
+{
+    if (evt->type == INPUT_EV_REL) {
+        if (evt->code == INPUT_REL_X) {
+            cursor_x += evt->value;
+        } else if (evt->code == INPUT_REL_Y) {
+            cursor_y += evt->value;
+        }
+        printk("Cursor: x=%d y=%d (delta: code=%d value=%d)\n", cursor_x, cursor_y, evt->code, evt->value);
+    }
+    // 必要に応じてHID送信処理を追加
+}
 
 /* Configuration from devicetree (constant for each instance) */
 struct accel_config {
