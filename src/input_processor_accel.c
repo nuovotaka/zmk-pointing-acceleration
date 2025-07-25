@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zmk/input.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/toolchain.h>
 #include <drivers/input_processor.h>
@@ -198,13 +199,13 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         struct input_event out_x = *event;
         out_x.code = INPUT_REL_X;
         out_x.value = accelerated_x;
-        input_processor_forward_event(dev, &out_x, param1, param2, state);
+        zmk_input_event_queue_put(&out_x);
 
         // Yイベント生成
         struct input_event out_y = *event;
         out_y.code = INPUT_REL_Y;
         out_y.value = accelerated_y;
-        input_processor_forward_event(dev, &out_y, param1, param2, state);
+        zmk_input_event_queue_put(&out_y);
 
         // 状態クリア
         data->has_pending_x = false;
