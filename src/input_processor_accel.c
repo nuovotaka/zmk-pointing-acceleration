@@ -9,6 +9,8 @@
 #define DT_DRV_COMPAT zmk_input_processor_acceleration
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
+#define ACCEL_PAIR_WINDOW_MS 5
+
 /* Forward declaration of the event handler */
 static int accel_handle_event(const struct device *dev, struct input_event *event,
                               uint32_t param1, uint32_t param2,
@@ -134,7 +136,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     if (data->has_pending_x && data->has_pending_y) {
         int64_t time_diff = abs(data->pending_x_time - data->pending_y_time);
-        if (time_diff <= 3) {  /* 3ms window for pairing */
+        if (time_diff <= ACCEL_PAIR_WINDOW_MS) {
             has_pair = true;
             dx = data->pending_x;
             dy = data->pending_y;
