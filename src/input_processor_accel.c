@@ -9,7 +9,9 @@
 #define DT_DRV_COMPAT zmk_input_processor_acceleration
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
-#define ACCEL_PAIR_WINDOW_MS 5
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
+#endif
 
 /* Forward declaration of the event handler */
 static int accel_handle_event(const struct device *dev, struct input_event *event,
@@ -62,7 +64,8 @@ static const struct accel_config accel_config_##inst = {                       \
     .max_factor = DT_INST_PROP_OR(inst, max_factor, 3500),                     \
     .speed_threshold = DT_INST_PROP_OR(inst, speed_threshold, 1000),           \
     .speed_max = DT_INST_PROP_OR(inst, speed_max, 6000),                       \
-    .acceleration_exponent = DT_INST_PROP_OR(inst, acceleration_exponent, 1)   \
+    .acceleration_exponent = DT_INST_PROP_OR(inst, acceleration_exponent, 1),  \
+    .pair_window_ms = CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS              \
 };                                                                             \
 static struct accel_data accel_data_##inst = {0};                              \
 DEVICE_DT_INST_DEFINE(inst,                                                    \
@@ -136,7 +139,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     if (data->has_pending_x && data->has_pending_y) {
         int64_t time_diff = abs(data->pending_x_time - data->pending_y_time);
-        if (time_diff <= ACCEL_PAIR_WINDOW_MS) {
+        if (time_diff <= cfg->pair_window_ms) {
             has_pair = true;
             dx = data->pending_x;
             dy = data->pending_y;

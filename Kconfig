@@ -13,3 +13,11 @@ config INPUT_PROCESSOR_ACCELERATION_INIT_PRIORITY
     int "Input processor acceleration initialization priority"
     default 90
     depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+
+# Kconfig
+config INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
+    int "Input processor acceleration pair window (ms)"
+    default 5
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Time window in milliseconds to pair X/Y events for acceleration.
