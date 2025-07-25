@@ -41,6 +41,10 @@ struct accel_data {
     int32_t pending_dy;                  /* Pending Y movement for paired processing */
     bool has_pending_x;                  /* Flag for pending X event */
     bool has_pending_y;                  /* Flag for pending Y event */
+    int64_t pending_x_time;              /* Timestamp of pending X event */
+    int64_t pending_y_time;              /* Timestamp of pending Y event */
+    uint16_t cached_factor;              /* Cached acceleration factor for paired events */
+    bool factor_cached;                  /* Flag indicating if factor is cached */
 };
 
 /* Populate config and data for each instance from devicetree */
@@ -113,84 +117,103 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     /* Get current timestamp */
     int64_t current_time = k_uptime_get();
-    int64_t time_delta = current_time - data->last_time;
     
-    /* Store current movement for direction-aware processing */
+    /* Store current movement with timestamp for paired processing */
     if (event->code == INPUT_REL_X) {
         data->pending_dx = event->value;
         data->has_pending_x = true;
+        data->pending_x_time = current_time;
     } else if (event->code == INPUT_REL_Y) {
         data->pending_dy = event->value;
         data->has_pending_y = true;
+        data->pending_y_time = current_time;
     }
     
-    /* Calculate movement magnitude considering recent paired movements */
-    int32_t dx = event->code == INPUT_REL_X ? event->value : data->last_phys_dx;
-    int32_t dy = event->code == INPUT_REL_Y ? event->value : data->last_phys_dy;
-    
-    /* Use combined movement if recent paired movement exists (within 10ms) */
-    if (time_delta < 10) {
-        if (event->code == INPUT_REL_X && data->has_pending_y) {
-            dy = data->pending_dy;
-        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
-            dx = data->pending_dx;
-        }
-    }
-    
-    /* Calculate combined movement magnitude for more accurate speed */
-    uint32_t magnitude_squared = (uint32_t)(dx * dx + dy * dy);
-    uint32_t magnitude = 0;
-    
-    /* Simple integer square root approximation */
-    if (magnitude_squared > 0) {
-        uint32_t x = magnitude_squared;
-        uint32_t y = (x + 1) / 2;
-        while (y < x) {
-            x = y;
-            y = (x + magnitude_squared / x) / 2;
-        }
-        magnitude = x;
-    }
-    
-    /* Fallback to single-axis magnitude if combined is zero */
-    if (magnitude == 0) {
-        magnitude = abs(event->value);
-    }
-    
-    if (time_delta <= 0) {
-        time_delta = 1; /* Avoid division by zero */
-    }
-    
-    /* Calculate speed based on movement magnitude */
-    uint32_t speed = (magnitude * 1000) / time_delta;
-    
-    /* Calculate acceleration factor based on speed */
+    /* Check for recent paired movement (within 5ms for tight coupling) */
+    bool has_recent_pair = false;
+    int32_t dx = 0, dy = 0;
     uint16_t factor = cfg->min_factor;
     
-    if (speed > cfg->speed_threshold) {
-        if (speed >= cfg->speed_max) {
-            factor = cfg->max_factor;
+    if (event->code == INPUT_REL_X) {
+        dx = event->value;
+        if (data->has_pending_y && (current_time - data->pending_y_time) <= 5) {
+            dy = data->pending_dy;
+            has_recent_pair = true;
+        }
+    } else if (event->code == INPUT_REL_Y) {
+        dy = event->value;
+        if (data->has_pending_x && (current_time - data->pending_x_time) <= 5) {
+            dx = data->pending_dx;
+            has_recent_pair = true;
+        }
+    }
+    
+    /* Use cached factor if processing paired movement */
+    if (has_recent_pair && data->factor_cached) {
+        factor = data->cached_factor;
+    } else {
+        /* Calculate new acceleration factor */
+        int64_t time_delta = current_time - data->last_time;
+        if (time_delta <= 0) {
+            time_delta = 1; /* Avoid division by zero */
+        }
+        
+        uint32_t magnitude;
+        if (has_recent_pair) {
+            /* Calculate combined movement magnitude for paired events */
+            uint32_t magnitude_squared = (uint32_t)(dx * dx + dy * dy);
+            magnitude = 0;
+            
+            /* Simple integer square root approximation */
+            if (magnitude_squared > 0) {
+                uint32_t x = magnitude_squared;
+                uint32_t y = (x + 1) / 2;
+                while (y < x) {
+                    x = y;
+                    y = (x + magnitude_squared / x) / 2;
+                }
+                magnitude = x;
+            }
         } else {
-            /* Interpolate between min and max factor based on speed */
-            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-            uint32_t speed_offset = speed - cfg->speed_threshold;
-            
-            /* Apply acceleration exponent */
-            uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
-            uint32_t accelerated_speed = normalized_speed;
-            
-            /* Simple exponent implementation for common cases */
-            if (cfg->acceleration_exponent == 2) {
-                accelerated_speed = (normalized_speed * normalized_speed) / 1000;
-            } else if (cfg->acceleration_exponent == 3) {
-                accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
-            }
-            
-            factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
-            if (factor > cfg->max_factor) {
+            /* Use single-axis magnitude */
+            magnitude = abs(event->value);
+        }
+        
+        /* Calculate speed based on movement magnitude */
+        uint32_t speed = (magnitude * 1000) / time_delta;
+        
+        /* Calculate acceleration factor based on speed */
+        if (speed > cfg->speed_threshold) {
+            if (speed >= cfg->speed_max) {
                 factor = cfg->max_factor;
+            } else {
+                /* Interpolate between min and max factor based on speed */
+                uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
+                uint32_t factor_range = cfg->max_factor - cfg->min_factor;
+                uint32_t speed_offset = speed - cfg->speed_threshold;
+                
+                /* Apply acceleration exponent */
+                uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
+                uint32_t accelerated_speed = normalized_speed;
+                
+                /* Simple exponent implementation for common cases */
+                if (cfg->acceleration_exponent == 2) {
+                    accelerated_speed = (normalized_speed * normalized_speed) / 1000;
+                } else if (cfg->acceleration_exponent == 3) {
+                    accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
+                }
+                
+                factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
+                if (factor > cfg->max_factor) {
+                    factor = cfg->max_factor;
+                }
             }
+        }
+        
+        /* Cache factor for paired processing */
+        if (has_recent_pair) {
+            data->cached_factor = factor;
+            data->factor_cached = true;
         }
     }
     
@@ -208,6 +231,18 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             accelerated_value += remainder_contribution;
             data->remainders[code_index] -= remainder_contribution * 10;
         }
+    }
+    
+    /* Clear cached factor if not part of a pair */
+    if (!has_recent_pair) {
+        data->factor_cached = false;
+    }
+    
+    /* Clear pending flags after processing */
+    if (event->code == INPUT_REL_X) {
+        data->has_pending_x = false;
+    } else if (event->code == INPUT_REL_Y) {
+        data->has_pending_y = false;
     }
     
     /* Update tracking data */
