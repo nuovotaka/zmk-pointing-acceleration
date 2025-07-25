@@ -21,3 +21,10 @@ config INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
     depends on ZMK_INPUT_PROCESSOR_ACCELERATION
     help
       Time window in milliseconds to pair X/Y events for acceleration.
+
+config INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
+    float "Y axis aspect ratio scale"
+    default 1.2
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Scale factor for Y axis movement to adjust for screen aspect ratio.
