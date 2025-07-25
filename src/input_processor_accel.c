@@ -14,7 +14,7 @@
 #define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
 #endif
 
-#define MY_EVENT_QUEUE_SIZE 8
+#define MY_EVENT_QUEUE_SIZE 16
 K_MSGQ_DEFINE(my_input_event_queue, sizeof(struct input_event), MY_EVENT_QUEUE_SIZE, 4);
 
 /* Forward declaration of the event handler */
@@ -52,9 +52,10 @@ void process_input_event(const struct input_event *evt)
         } else if (evt->code == INPUT_REL_Y) {
             cursor_y += evt->value;
         }
+#ifdef DEBUG_CURSOR
         printk("Cursor: x=%d y=%d (delta: code=%d value=%d)\n", cursor_x, cursor_y, evt->code, evt->value);
+#endif
     }
-    // 必要に応じてHID送信処理を追加
 }
 
 /* Configuration from devicetree (constant for each instance) */
