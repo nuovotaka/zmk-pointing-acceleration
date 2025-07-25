@@ -12,7 +12,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 10
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -24,11 +24,11 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 2500
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 2000
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
-#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 300
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 800
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX
@@ -83,7 +83,7 @@ static const struct accel_config accel_config_##inst = {                       \
     .input_type = INPUT_EV_REL,                                                \
     .codes = accel_codes_##inst,                                               \
     .codes_count = 4,                                                          \
-    .track_remainders = DT_INST_PROP_OR(inst, track_remainders, true),         \
+    .track_remainders = DT_INST_PROP_OR(inst, track_remainders, false),         \
     .min_factor = DT_INST_PROP_OR(inst, min_factor, CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR),                     \
     .max_factor = DT_INST_PROP_OR(inst, max_factor, CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR),                     \
     .speed_threshold = DT_INST_PROP_OR(inst, speed_threshold, CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD),            \
@@ -207,10 +207,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // ペア時の加速度計算
         int64_t time_delta = current_time - data->last_time;
         if (time_delta <= 0) time_delta = 1;
-        if (time_delta > 50) time_delta = 50; // 最大50msに制限（より応答性を向上）
+        if (time_delta > 100) time_delta = 100; // 最大100msに制限
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
+        if (speed > 10000) speed = 10000; // 異常に高い速度を制限
 
         uint16_t factor = cfg->min_factor;
         if (speed > cfg->speed_threshold) {
@@ -290,9 +291,10 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // --- ここから単独軸の加速度処理 ---
     int64_t time_delta = current_time - data->last_time;
     if (time_delta <= 0) time_delta = 1;
-    if (time_delta > 50) time_delta = 50; // 最大50msに制限（より応答性を向上）
+    if (time_delta > 100) time_delta = 100; // 最大100msに制限
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
+    if (speed > 10000) speed = 10000; // 異常に高い速度を制限
     uint16_t factor = cfg->min_factor;
     if (speed > cfg->speed_threshold) {
         if (speed >= cfg->speed_max) {
