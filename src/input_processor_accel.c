@@ -40,6 +40,13 @@ struct accel_data {
     bool has_pending_y;
 };
 
+int input_processor_forward_event(const struct device *dev,
+                                 struct input_event *event,
+                                 uint32_t param1,
+                                 uint32_t param2,
+                                 struct zmk_input_processor_state *state);
+
+
 static int accel_handle_event(const struct device *dev, struct input_event *event,
                              uint32_t param1, uint32_t param2,
                              struct zmk_input_processor_state *state);
@@ -74,6 +81,19 @@ DEVICE_DT_INST_DEFINE(inst,                                                    \
 // 例: 1インスタンスだけ生成
 ACCEL_INST_INIT(0)
 
+
+int input_processor_forward_event(const struct device *dev,
+                                 struct input_event *event,
+                                 uint32_t param1,
+                                 uint32_t param2,
+                                 struct zmk_input_processor_state *state) {
+    ARG_UNUSED(dev);
+    ARG_UNUSED(event);
+    ARG_UNUSED(param1);
+    ARG_UNUSED(param2);
+    ARG_UNUSED(state);
+    return 0;
+}
 
 static int accel_handle_event(const struct device *dev, struct input_event *event,
                              uint32_t param1, uint32_t param2,
