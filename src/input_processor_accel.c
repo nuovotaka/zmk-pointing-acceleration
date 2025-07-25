@@ -12,7 +12,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 15
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -28,7 +28,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
-#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 500
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 300
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX
@@ -78,11 +78,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
 
 #define ACCEL_INST_INIT(inst)                                                  \
-static const uint16_t accel_codes_##inst[] = { INPUT_REL_X, INPUT_REL_Y };     \
+static const uint16_t accel_codes_##inst[] = { INPUT_REL_X, INPUT_REL_Y, INPUT_REL_WHEEL, INPUT_REL_HWHEEL };     \
 static const struct accel_config accel_config_##inst = {                       \
     .input_type = INPUT_EV_REL,                                                \
     .codes = accel_codes_##inst,                                               \
-    .codes_count = 2,                                                          \
+    .codes_count = 4,                                                          \
     .track_remainders = DT_INST_PROP_OR(inst, track_remainders, true),         \
     .min_factor = DT_INST_PROP_OR(inst, min_factor, CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR),                     \
     .max_factor = DT_INST_PROP_OR(inst, max_factor, CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR),                     \
@@ -127,8 +127,19 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     const struct accel_config *cfg = dev->config;
     struct accel_data *data = dev->data;
 
-    // 指定タイプ・コード以外はスルー
-    if (event->type != cfg->input_type) return 0;
+    // 指定タイプ以外はそのまま通す
+    if (event->type != cfg->input_type) {
+        int ret = input_processor_forward_event(dev, event, param1, param2, state);
+        if (ret == 1) {
+            // タイプに応じて適切な報告関数を使用
+            if (event->type == INPUT_EV_KEY) {
+                input_report_key(dev, event->code, event->value, event->sync, K_FOREVER);
+            } else if (event->type == INPUT_EV_REL) {
+                input_report_rel(dev, event->code, event->value, event->sync, K_FOREVER);
+            }
+        }
+        return 0;
+    }
     bool code_matched = false;
     uint32_t code_index = 0;
     for (uint32_t i = 0; i < cfg->codes_count; ++i) {
@@ -141,6 +152,15 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     if (!code_matched) return 0;
     if (event->value == 0) return 0;
     if (code_index >= ACCEL_MAX_CODES) return 0;
+
+    // 回転イベント（ホイール）は加速度処理せずにそのまま通す
+    if (event->code == INPUT_REL_WHEEL || event->code == INPUT_REL_HWHEEL) {
+        int ret = input_processor_forward_event(dev, event, param1, param2, state);
+        if (ret == 1) {
+            input_report_rel(dev, event->code, event->value, true, K_FOREVER);
+        }
+        return 0;
+    }
 
     int64_t current_time = k_uptime_get();
 
@@ -155,7 +175,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         data->has_pending_y = true;
     }
 
-    // ペア判定
+    // ペア判定 - より柔軟な条件に変更
     bool has_pair = false;
     int32_t dx = 0, dy = 0;
     if (data->has_pending_x && data->has_pending_y) {
@@ -166,12 +186,28 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             dy = data->pending_y;
         }
     }
+    
+    // ペアが見つからない場合、古いペンディングデータをクリアして単独処理に進む
+    if (!has_pair) {
+        // 現在のイベントより古いペンディングデータがあればクリア
+        if (event->code == INPUT_REL_X && data->has_pending_y) {
+            int64_t y_age = current_time - data->pending_y_time;
+            if (y_age > cfg->pair_window_ms) {
+                data->has_pending_y = false;
+            }
+        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
+            int64_t x_age = current_time - data->pending_x_time;
+            if (x_age > cfg->pair_window_ms) {
+                data->has_pending_x = false;
+            }
+        }
+    }
 
     if (has_pair) {
         // ペア時の加速度計算
         int64_t time_delta = current_time - data->last_time;
         if (time_delta <= 0) time_delta = 1;
-        if (time_delta > 100) time_delta = 100; // 最大100msに制限
+        if (time_delta > 50) time_delta = 50; // 最大50msに制限（より応答性を向上）
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
@@ -254,7 +290,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // --- ここから単独軸の加速度処理 ---
     int64_t time_delta = current_time - data->last_time;
     if (time_delta <= 0) time_delta = 1;
-    if (time_delta > 100) time_delta = 100; // 最大100msに制限
+    if (time_delta > 50) time_delta = 50; // 最大50msに制限（より応答性を向上）
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
     uint16_t factor = cfg->min_factor;
