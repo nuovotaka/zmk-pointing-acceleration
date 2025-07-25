@@ -97,7 +97,7 @@ int input_processor_forward_event(const struct device *dev,
     ARG_UNUSED(state);
 
     // Zephyrのメッセージキューにイベントをput
-    return k_msgq_put(&my_input_event_queue, event, K_NO_WAIT);
+    return k_msgq_put(&my_input_event_queue, event, K_FOREVER);
 }
 
 /* Event handler implementation */
