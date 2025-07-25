@@ -258,8 +258,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     data->last_time = current_time;
     data->last_code = event->code;
     if (event->code == INPUT_REL_X) {
- 
-
-    return 0;
+        return 0;
+    }
 }
 #endif // DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
