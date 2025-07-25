@@ -28,3 +28,39 @@ config INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
     help
       Scale factor for Y axis movement to adjust for screen aspect ratio.
       1000 = 1.0x, 1200 = 1.2x, etc.
+
+config INPUT_PROCESSOR_ACCEL_MIN_FACTOR
+    int "Minimum acceleration factor (scaled by 1000)"
+    default 1000
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Minimum acceleration factor. 1000 = 1.0x (no acceleration).
+
+config INPUT_PROCESSOR_ACCEL_MAX_FACTOR
+    int "Maximum acceleration factor (scaled by 1000)"
+    default 2500
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Maximum acceleration factor. 2500 = 2.5x acceleration.
+
+config INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
+    int "Speed threshold for acceleration start"
+    default 500
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Speed threshold below which no acceleration is applied.
+
+config INPUT_PROCESSOR_ACCEL_SPEED_MAX
+    int "Maximum speed for acceleration calculation"
+    default 4000
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Speed at which maximum acceleration factor is reached.
+
+config INPUT_PROCESSOR_ACCEL_EXPONENT
+    int "Acceleration curve exponent"
+    default 2
+    range 1 3
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      Exponent for acceleration curve. 1=linear, 2=quadratic, 3=cubic.

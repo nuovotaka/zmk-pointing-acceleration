@@ -12,11 +12,31 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 10
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 15
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
 #define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 1500
+#endif
+
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR 1000
+#endif
+
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 2500
+#endif
+
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 500
+#endif
+
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX 4000
+#endif
+
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_EXPONENT
+#define CONFIG_INPUT_PROCESSOR_ACCEL_EXPONENT 2
 #endif
 
 struct accel_config {
@@ -63,14 +83,14 @@ static const struct accel_config accel_config_##inst = {                       \
     .input_type = INPUT_EV_REL,                                                \
     .codes = accel_codes_##inst,                                               \
     .codes_count = 2,                                                          \
-    .track_remainders = true,                                                  \
-    .min_factor = 1000,                                                        \
-    .max_factor = 3500,                                                        \
-    .speed_threshold = 1000,                                                   \
-    .speed_max = 6000,                                                         \
-    .acceleration_exponent = 2,                                                \
-    .pair_window_ms = CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS,             \
-    .y_aspect_scale = CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE              \
+    .track_remainders = DT_INST_PROP_OR(inst, track_remainders, true),         \
+    .min_factor = DT_INST_PROP_OR(inst, min_factor, CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR),                     \
+    .max_factor = DT_INST_PROP_OR(inst, max_factor, CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR),                     \
+    .speed_threshold = DT_INST_PROP_OR(inst, speed_threshold, CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD),            \
+    .speed_max = DT_INST_PROP_OR(inst, speed_max, CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX),                       \
+    .acceleration_exponent = DT_INST_PROP_OR(inst, acceleration_exponent, CONFIG_INPUT_PROCESSOR_ACCEL_EXPONENT),  \
+    .pair_window_ms = DT_INST_PROP_OR(inst, pair_window_ms, CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS), \
+    .y_aspect_scale = DT_INST_PROP_OR(inst, y_aspect_scale, CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE)  \
 };                                                                             \
 static struct accel_data accel_data_##inst = {0};                              \
 DEVICE_DT_INST_DEFINE(inst,                                                    \
@@ -151,6 +171,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // ペア時の加速度計算
         int64_t time_delta = current_time - data->last_time;
         if (time_delta <= 0) time_delta = 1;
+        if (time_delta > 100) time_delta = 100; // 最大100msに制限
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
@@ -233,6 +254,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // --- ここから単独軸の加速度処理 ---
     int64_t time_delta = current_time - data->last_time;
     if (time_delta <= 0) time_delta = 1;
+    if (time_delta > 100) time_delta = 100; // 最大100msに制限
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
     uint16_t factor = cfg->min_factor;
@@ -259,10 +281,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     // Y軸の場合はアスペクト比スケーリングを適用
     if (event->code == INPUT_REL_Y) {
-        int32_t original_value = accelerated_value;
         accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
-        printk("Y-axis scaling: original=%d, scale=%d, result=%d\n", 
-               original_value, cfg->y_aspect_scale, accelerated_value);
     }
 
     // 端数処理
