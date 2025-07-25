@@ -178,7 +178,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
 
-        int32_t accelerated_y = (int32_t)(((dy * factor) / 1000) * cfg->y_aspect_scale / 1000);
+        int32_t accelerated_y = (int32_t)((dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
         // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
@@ -256,10 +256,19 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     }
 
     int32_t accelerated_value = (event->value * factor) / 1000;
+    
+    // Y軸の場合はアスペクト比スケーリングを適用
+    if (event->code == INPUT_REL_Y) {
+        accelerated_value = (accelerated_value * cfg->y_aspect_scale) / 1000;
+    }
 
     // 端数処理
     if (cfg->track_remainders && code_index < ACCEL_MAX_CODES) {
-        int32_t remainder = ((event->value * factor) % 1000) / 100;
+        int32_t base_calculation = event->value * factor;
+        if (event->code == INPUT_REL_Y) {
+            base_calculation = (base_calculation * cfg->y_aspect_scale) / 1000;
+        }
+        int32_t remainder = (base_calculation % 1000) / 100;
         data->remainders[code_index] += remainder;
         if (abs(data->remainders[code_index]) >= 10) {
             int32_t remainder_contribution = data->remainders[code_index] / 10;
