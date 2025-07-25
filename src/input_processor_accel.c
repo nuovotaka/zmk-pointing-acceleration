@@ -37,6 +37,15 @@ struct accel_data {
     int32_t last_phys_dy;                /* Last physical Y delta (for direction check) */
     uint16_t last_code;                  /* Last event code processed (e.g. REL_X or REL_Y) */
     int16_t remainders[ACCEL_MAX_CODES]; /* Remainder values for fractional movements per code */
+    
+    int32_t pending_x;                   /* Pending X movement */
+    int32_t pending_y;                   /* Pending Y movement */
+    int64_t pending_x_time;              /* Timestamp of pending X */
+    int64_t pending_y_time;              /* Timestamp of pending Y */
+    bool has_pending_x;                  /* Has pending X movement */
+    bool has_pending_y;                  /* Has pending Y movement */
+    uint16_t shared_factor;              /* Shared acceleration factor for paired events */
+    bool factor_ready;                   /* Factor calculated and ready to use */
 };
 
 /* Populate config and data for each instance from devicetree */
@@ -110,41 +119,115 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     /* Get current timestamp */
     int64_t current_time = k_uptime_get();
     
-    /* Calculate time delta and speed */
-    int64_t time_delta = current_time - data->last_time;
-    if (time_delta <= 0) {
-        time_delta = 1; /* Avoid division by zero */
+    if (event->code == INPUT_REL_X) {
+        data->pending_x = event->value;
+        data->pending_x_time = current_time;
+        data->has_pending_x = true;
+    } else if (event->code == INPUT_REL_Y) {
+        data->pending_y = event->value;
+        data->pending_y_time = current_time;
+        data->has_pending_y = true;
     }
     
-    /* Calculate speed in counts per second */
-    uint32_t speed = (abs(event->value) * 1000) / time_delta;
+    bool has_pair = false;
+    int32_t dx = 0, dy = 0;
     
-    /* Calculate acceleration factor based on speed */
+    if (data->has_pending_x && data->has_pending_y) {
+        int64_t time_diff = abs(data->pending_x_time - data->pending_y_time);
+        if (time_diff <= 3) {  /* 3ms window for pairing */
+            has_pair = true;
+            dx = data->pending_x;
+            dy = data->pending_y;
+        }
+    }
+    
+    /* Calculate acceleration factor */
     uint16_t factor = cfg->min_factor;
     
-    if (speed > cfg->speed_threshold) {
-        if (speed >= cfg->speed_max) {
-            factor = cfg->max_factor;
-        } else {
-            /* Interpolate between min and max factor based on speed */
-            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-            uint32_t speed_offset = speed - cfg->speed_threshold;
-            
-            /* Apply acceleration exponent */
-            uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
-            uint32_t accelerated_speed = normalized_speed;
-            
-            /* Simple exponent implementation for common cases */
-            if (cfg->acceleration_exponent == 2) {
-                accelerated_speed = (normalized_speed * normalized_speed) / 1000;
-            } else if (cfg->acceleration_exponent == 3) {
-                accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
+    if (has_pair && !data->factor_ready) {
+        int64_t time_delta = current_time - data->last_time;
+        if (time_delta <= 0) {
+            time_delta = 1;
+        }
+        
+        /* Calculate combined magnitude */
+        uint32_t magnitude_squared = (uint32_t)(dx * dx + dy * dy);
+        uint32_t magnitude = 0;
+        
+        /* Simple integer square root */
+        if (magnitude_squared > 0) {
+            uint32_t x = magnitude_squared;
+            uint32_t y = (x + 1) / 2;
+            while (y < x) {
+                x = y;
+                y = (x + magnitude_squared / x) / 2;
             }
-            
-            factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
-            if (factor > cfg->max_factor) {
+            magnitude = x;
+        }
+        
+        uint32_t speed = (magnitude * 1000) / time_delta;
+        
+        if (speed > cfg->speed_threshold) {
+            if (speed >= cfg->speed_max) {
                 factor = cfg->max_factor;
+            } else {
+                uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
+                uint32_t factor_range = cfg->max_factor - cfg->min_factor;
+                uint32_t speed_offset = speed - cfg->speed_threshold;
+                
+                uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
+                uint32_t accelerated_speed = normalized_speed;
+                
+                if (cfg->acceleration_exponent == 2) {
+                    accelerated_speed = (normalized_speed * normalized_speed) / 1000;
+                } else if (cfg->acceleration_exponent == 3) {
+                    accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
+                }
+                
+                factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
+                if (factor > cfg->max_factor) {
+                    factor = cfg->max_factor;
+                }
+            }
+        }
+        
+        /* Cache factor for both axes */
+        data->shared_factor = factor;
+        data->factor_ready = true;
+        
+    } else if (data->factor_ready) {
+        /* Use cached factor for paired processing */
+        factor = data->shared_factor;
+    } else {
+        /* Single axis processing */
+        int64_t time_delta = current_time - data->last_time;
+        if (time_delta <= 0) {
+            time_delta = 1;
+        }
+        
+        uint32_t speed = (abs(event->value) * 1000) / time_delta;
+        
+        if (speed > cfg->speed_threshold) {
+            if (speed >= cfg->speed_max) {
+                factor = cfg->max_factor;
+            } else {
+                uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
+                uint32_t factor_range = cfg->max_factor - cfg->min_factor;
+                uint32_t speed_offset = speed - cfg->speed_threshold;
+                
+                uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
+                uint32_t accelerated_speed = normalized_speed;
+                
+                if (cfg->acceleration_exponent == 2) {
+                    accelerated_speed = (normalized_speed * normalized_speed) / 1000;
+                } else if (cfg->acceleration_exponent == 3) {
+                    accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
+                }
+                
+                factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
+                if (factor > cfg->max_factor) {
+                    factor = cfg->max_factor;
+                }
             }
         }
     }
@@ -154,10 +237,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     /* Handle remainders if enabled */
     if (cfg->track_remainders && code_index < ACCEL_MAX_CODES) {
-        int32_t remainder = ((event->value * factor) % 1000) / 100; /* Scale to avoid overflow */
+        int32_t remainder = ((event->value * factor) % 1000) / 100;
         data->remainders[code_index] += remainder;
         
-        /* Add accumulated remainder to output */
         if (abs(data->remainders[code_index]) >= 10) {
             int32_t remainder_contribution = data->remainders[code_index] / 10;
             accelerated_value += remainder_contribution;
@@ -165,17 +247,18 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
     
+    /* Clear pending flags after processing both axes */
+    if (has_pair) {
+        data->has_pending_x = false;
+        data->has_pending_y = false;
+        data->factor_ready = false;
+    }
+    
     /* Update tracking data */
     data->last_time = current_time;
     data->last_code = event->code;
     if (event->code == INPUT_REL_X) {
-        data->last_phys_dx = event->value;
-    } else if (event->code == INPUT_REL_Y) {
-        data->last_phys_dy = event->value;
-    }
-    
-    /* Update event value with accelerated result */
-    event->value = accelerated_value;
+ 
 
     return 0;
 }
