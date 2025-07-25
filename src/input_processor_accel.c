@@ -1,108 +1,60 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/input/input.h>
 #include <zephyr/sys/printk.h>
-#include <zephyr/sys/util.h>
-#include <zephyr/toolchain.h>
-#include <drivers/input_processor.h>
-#include <zephyr/dt-bindings/input/input-event-codes.h>
-#include <stdlib.h>  // For abs() function
+#include <zephyr/autoconf.h>
+#include <math.h>
+
 
 #define DT_DRV_COMPAT zmk_input_processor_acceleration
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
+#define ACCEL_MAX_CODES 4
+// Kconfigで定義した値を使う
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
 #define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 5
 #endif
 
-#define MY_EVENT_QUEUE_SIZE 16
-K_MSGQ_DEFINE(my_input_event_queue, sizeof(struct input_event), MY_EVENT_QUEUE_SIZE, 4);
-
-/* Forward declaration of the event handler */
-static int accel_handle_event(const struct device *dev, struct input_event *event,
-                              uint32_t param1, uint32_t param2,
-                              struct zmk_input_processor_state *state);
-
-/* Maximum number of event codes this processor can handle (e.g. REL_X, REL_Y). */
-#define ACCEL_MAX_CODES 4
-
-extern struct k_msgq my_input_event_queue;
-
-void event_consumer_thread(void)
-{
-    struct input_event evt;
-    while (1) {
-        int ret = k_msgq_get(&my_input_event_queue, &evt, K_FOREVER);
-        if (ret == 0) {
-            process_input_event(&evt); // 下で定義
-        }
-    }
-}
-
-K_THREAD_DEFINE(event_consumer_tid, 1024, event_consumer_thread, NULL, NULL, NULL, 5, 0, 0);
-
-// 仮想カーソル座標
-static int32_t cursor_x = 0;
-static int32_t cursor_y = 0;
-
-void process_input_event(const struct input_event *evt)
-{
-    if (evt->type == INPUT_EV_REL) {
-        if (evt->code == INPUT_REL_X) {
-            cursor_x += evt->value;
-        } else if (evt->code == INPUT_REL_Y) {
-            cursor_y += evt->value;
-        }
-#ifdef DEBUG_CURSOR
-        printk("Cursor: x=%d y=%d (delta: code=%d value=%d)\n", cursor_x, cursor_y, evt->code, evt->value);
-#endif
-    }
-}
-
-/* Configuration from devicetree (constant for each instance) */
+// 加速度設定構造体（DTSから取得）
 struct accel_config {
-    uint8_t input_type;                  /* Event type to process (e.g. INPUT_EV_REL) */
-    const uint16_t *codes;               /* Array of event code values to accelerate (e.g. REL_X, REL_Y) */
-    uint32_t codes_count;                /* Number of codes in the array */
-    bool track_remainders;               /* Whether to accumulate fractional movement remainders */
-    uint16_t min_factor;                 /* Minimum acceleration factor (scaled by 1000, e.g. 500 = 0.5x) */
-    uint16_t max_factor;                 /* Maximum acceleration factor (scaled by 1000, e.g. 3500 = 3.5x) */
-    uint32_t speed_threshold;            /* Speed (counts per second) at which factor reaches 1.0 */
-    uint32_t speed_max;                  /* Speed (counts per second) at which factor reaches max_factor */
-    uint8_t  acceleration_exponent;      /* Exponent for acceleration curve (1=linear, 2=quadratic, etc.) */
+    uint8_t input_type;
+    const uint16_t *codes;
+    uint32_t codes_count;
+    bool track_remainders;
+    uint16_t min_factor;
+    uint16_t max_factor;
+    uint32_t speed_threshold;
+    uint32_t speed_max;
+    uint8_t  acceleration_exponent;
     uint8_t  pair_window_ms;
 };
 
-/* Runtime state for each instance (mutable data) */
 struct accel_data {
-    int64_t last_time;                   /* Timestamp of last processed event (ms) */
-    int32_t last_phys_dx;                /* Last physical X delta (for direction check) */
-    int32_t last_phys_dy;                /* Last physical Y delta (for direction check) */
-    uint16_t last_code;                  /* Last event code processed (e.g. REL_X or REL_Y) */
-    int16_t remainders[ACCEL_MAX_CODES]; /* Remainder values for fractional movements per code */
-    
-    int32_t pending_x;                   /* Pending X movement */
-    int32_t pending_y;                   /* Pending Y movement */
-    int64_t pending_x_time;              /* Timestamp of pending X */
-    int64_t pending_y_time;              /* Timestamp of pending Y */
-    bool has_pending_x;                  /* Has pending X movement */
-    bool has_pending_y;                  /* Has pending Y movement */
-    uint16_t shared_factor;              /* Shared acceleration factor for paired events */
-    bool factor_ready;                   /* Factor calculated and ready to use */
+    int64_t last_time;
+    int16_t remainders[ACCEL_MAX_CODES];
+
+    // ペア処理用
+    int32_t pending_x;
+    int32_t pending_y;
+    int64_t pending_x_time;
+    int64_t pending_y_time;
+    bool has_pending_x;
+    bool has_pending_y;
 };
 
-/* Populate config and data for each instance from devicetree */
+// インスタンス生成時にKconfig値を使う
 #define ACCEL_INST_INIT(inst)                                                  \
 static const uint16_t accel_codes_##inst[] = { INPUT_REL_X, INPUT_REL_Y };     \
 static const struct accel_config accel_config_##inst = {                       \
-    .input_type = DT_INST_PROP_OR(inst, input_type, INPUT_EV_REL),             \
+    .input_type = INPUT_EV_REL,                                                \
     .codes = accel_codes_##inst,                                               \
-    .codes_count = ARRAY_SIZE(accel_codes_##inst),                                                          \
-    .track_remainders = DT_INST_NODE_HAS_PROP(inst, track_remainders),         \
-    .min_factor = DT_INST_PROP_OR(inst, min_factor, 1000),                     \
-    .max_factor = DT_INST_PROP_OR(inst, max_factor, 3500),                     \
-    .speed_threshold = DT_INST_PROP_OR(inst, speed_threshold, 1000),           \
-    .speed_max = DT_INST_PROP_OR(inst, speed_max, 6000),                       \
-    .acceleration_exponent = DT_INST_PROP_OR(inst, acceleration_exponent, 1),  \
+    .codes_count = 2,                                                          \
+    .track_remainders = true,                                                  \
+    .min_factor = 1000,                                                        \
+    .max_factor = 3500,                                                        \
+    .speed_threshold = 1000,                                                   \
+    .speed_max = 6000,                                                         \
+    .acceleration_exponent = 2,                                                \
     .pair_window_ms = CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS              \
 };                                                                             \
 static struct accel_data accel_data_##inst = {0};                              \
@@ -117,36 +69,18 @@ DEVICE_DT_INST_DEFINE(inst,                                                    \
                           .handle_event = accel_handle_event                   \
                       });
 
-/* Instantiate for each DT node matching our compatible */
-DT_INST_FOREACH_STATUS_OKAY(ACCEL_INST_INIT)
+// 例: 1インスタンスだけ生成
+ACCEL_INST_INIT(0)
 
-int input_processor_forward_event(const struct device *dev,
-                                 struct input_event *event,
-                                 uint32_t param1,
-                                 uint32_t param2,
-                                 struct zmk_input_processor_state *state) {
-    ARG_UNUSED(dev);
-    ARG_UNUSED(param1);
-    ARG_UNUSED(param2);
-    ARG_UNUSED(state);
 
-    // Zephyrのメッセージキューにイベントをput
-    return k_msgq_put(&my_input_event_queue, event, K_FOREVER);
-}
-
-/* Event handler implementation */
 static int accel_handle_event(const struct device *dev, struct input_event *event,
-                              uint32_t param1, uint32_t param2,
-                              struct zmk_input_processor_state *state) {
-    ARG_UNUSED(param1);
-    ARG_UNUSED(param2);
-    ARG_UNUSED(state);
+                             uint32_t param1, uint32_t param2,
+                             struct zmk_input_processor_state *state) {
     const struct accel_config *cfg = dev->config;
     struct accel_data *data = dev->data;
 
+    // 指定タイプ・コード以外はスルー
     if (event->type != cfg->input_type) return 0;
-
-    // コード判定
     bool code_matched = false;
     uint32_t code_index = 0;
     for (uint32_t i = 0; i < cfg->codes_count; ++i) {
@@ -190,17 +124,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int64_t time_delta = current_time - data->last_time;
         if (time_delta <= 0) time_delta = 1;
 
-        uint32_t magnitude_squared = (uint32_t)(dx * dx + dy * dy);
-        uint32_t magnitude = 0;
-        if (magnitude_squared > 0) {
-            uint32_t x = magnitude_squared;
-            uint32_t y = (x + 1) / 2;
-            while (y < x) {
-                x = y;
-                y = (x + magnitude_squared / x) / 2;
-            }
-            magnitude = x;
-        }
+        uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
 
         uint16_t factor = cfg->min_factor;
@@ -227,7 +151,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_x = (dx * factor) / 1000;
         int32_t accelerated_y = (dy * factor) / 1000;
 
-        // 端数処理（必要なら）
+        // 端数処理
         if (cfg->track_remainders) {
             int32_t rem_x = ((dx * factor) % 1000) / 100;
             int32_t rem_y = ((dy * factor) % 1000) / 100;
@@ -245,13 +169,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-        // Xイベント生成
+        // X/Y両方のイベントを生成してforward（ZMK流ならinput_processor_forward_event等で）
         struct input_event out_x = *event;
         out_x.code = INPUT_REL_X;
         out_x.value = accelerated_x;
         input_processor_forward_event(dev, &out_x, param1, param2, state);
 
-        // Yイベント生成
         struct input_event out_y = *event;
         out_y.code = INPUT_REL_Y;
         out_y.value = accelerated_y;
@@ -260,18 +183,13 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // 状態クリア
         data->has_pending_x = false;
         data->has_pending_y = false;
-        data->factor_ready = false;
         data->last_time = current_time;
-        data->last_code = 0;
-        data->last_phys_dx = dx;
-        data->last_phys_dy = dy;
 
         // 既に両方出力したので、元のeventは処理しない
         return 1;
     }
 
     // --- ここから単独軸の加速度処理 ---
-    // ペアでなければ従来通り単独軸処理
     int64_t time_delta = current_time - data->last_time;
     if (time_delta <= 0) time_delta = 1;
 
@@ -311,16 +229,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     // 状態更新
     data->last_time = current_time;
-    data->last_code = event->code;
-    if (event->code == INPUT_REL_X) {
-        data->last_phys_dx = event->value;
-    } else if (event->code == INPUT_REL_Y) {
-        data->last_phys_dy = event->value;
-    }
 
     // 加速値をeventに反映
     event->value = accelerated_value;
 
     return 0;
 }
+
 #endif // DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
