@@ -13,7 +13,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 25
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 8
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -62,13 +62,11 @@ struct accel_config {
 struct accel_data {
     int64_t last_time;
     int16_t remainders[ACCEL_MAX_CODES];
-
-    int32_t pending_x;
-    int32_t pending_y;
-    int64_t pending_x_time;
-    int64_t pending_y_time;
-    bool has_pending_x;
-    bool has_pending_y;
+    
+    // ベクトルバッファシステム
+    int32_t vector_x;  // 累積X軸移動量
+    int32_t vector_y;  // 累積Y軸移動量
+    int64_t last_flush_time; // 最後にベクトルを出力した時間
     
     uint16_t last_factor; // 前回の加速度係数を記録
 };
@@ -173,109 +171,71 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     int64_t current_time = k_uptime_get();
 
-    // ペンディングに格納（常に最新の値で更新）
+    // ベクトルバッファに累積
     if (event->code == INPUT_REL_X) {
-        data->pending_x = event->value;
-        data->pending_x_time = current_time;
-        data->has_pending_x = true;
+        data->vector_x += event->value;
     } else if (event->code == INPUT_REL_Y) {
-        data->pending_y = event->value;
-        data->pending_y_time = current_time;
-        data->has_pending_y = true;
-    }
-
-    // ペア判定 - 非常に柔軟な条件に変更
-    bool has_pair = false;
-    int32_t dx = 0, dy = 0;
-    if (data->has_pending_x && data->has_pending_y) {
-        int64_t time_diff = llabs(data->pending_x_time - data->pending_y_time);
-        if (time_diff <= cfg->pair_window_ms * 2) { // 時間窓を2倍に拡大
-            has_pair = true;
-            dx = data->pending_x;
-            dy = data->pending_y;
-        }
+        data->vector_y += event->value;
     }
     
-    // ペアが見つからない場合、古いペンディングデータをクリア
-    if (!has_pair) {
-        // 古いペンディングデータをクリア（適度な時間で）
-        if (event->code == INPUT_REL_X && data->has_pending_y) {
-            int64_t y_age = llabs(current_time - data->pending_y_time);
-            if (y_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
-                data->has_pending_y = false;
-            }
-        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
-            int64_t x_age = llabs(current_time - data->pending_x_time);
-            if (x_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
-                data->has_pending_x = false;
-            }
+    // フラッシュ判定（一定時間経過または十分な移動量が蓄積）
+    bool should_flush = false;
+    int64_t time_since_flush = current_time - data->last_flush_time;
+    
+    if (time_since_flush >= cfg->pair_window_ms || // 時間経過
+        abs(data->vector_x) + abs(data->vector_y) >= 5) { // 十分な移動量
+        should_flush = true;
+    }
+    
+    if (!should_flush) {
+        // まだフラッシュしない場合は、イベントを蓄積して終了
+        return 0;
+    }
+
+    // ベクトル処理を実行
+    int32_t dx = data->vector_x;
+    int32_t dy = data->vector_y;
+    
+    // ベクトルバッファをクリア
+    data->vector_x = 0;
+    data->vector_y = 0;
+    data->last_flush_time = current_time;
+    
+    // 移動量がない場合は何もしない
+    if (dx == 0 && dy == 0) {
+        return 0;
+    }
+    
+    // ベクトルベースの加速度計算
+    int64_t time_delta = current_time - data->last_time;
+    if (time_delta <= 0) time_delta = 1;
+    if (time_delta > 100) time_delta = 100;
+    
+    uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
+    uint32_t speed = (magnitude * 1000) / time_delta;
+    
+    // 基本的な加速度処理
+    uint16_t factor = cfg->min_factor;
+    if (speed > cfg->speed_threshold) {
+        if (speed >= cfg->speed_max) {
+            factor = cfg->max_factor;
+        } else {
+            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
+            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
+            uint32_t speed_offset = speed - cfg->speed_threshold;
+            factor = cfg->min_factor + ((factor_range * speed_offset) / speed_range);
+            if (factor > cfg->max_factor) factor = cfg->max_factor;
         }
     }
 
-    // 強制的にペア処理を実行
-    if (!has_pair) {
-        // 常にペア処理を行う（片方がない場合は0として処理）
-        if (event->code == INPUT_REL_X) {
-            has_pair = true;
-            dx = event->value;
-            dy = data->has_pending_y ? data->pending_y : 0;
-            if (data->has_pending_y) {
-                data->has_pending_y = false; // 使用済みをクリア
-            }
-        } else if (event->code == INPUT_REL_Y) {
-            has_pair = true;
-            dx = data->has_pending_x ? data->pending_x : 0;
-            dy = event->value;
-            if (data->has_pending_x) {
-                data->has_pending_x = false; // 使用済みをクリア
-            }
-        }
+    // ベクトル成分に加速度を適用
+    int32_t accelerated_x = (dx * factor) / 1000;
+    int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
+    
+    // Y軸の最小感度を保証
+    if (dy != 0 && abs(accelerated_y) < abs(dy * 2)) {
+        accelerated_y = dy * 3; // 最低でも3倍
     }
-
-    if (has_pair) {
-        // 基本的な時間と速度計算
-        int64_t time_delta = current_time - data->last_time;
-        if (time_delta <= 0) time_delta = 1;
-        if (time_delta > 100) time_delta = 100;
-        
-        uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
-        uint32_t speed = (magnitude * 1000) / time_delta;
-        
-        // 基本的な加速度処理
-        uint16_t factor = cfg->min_factor;
-        
-        // 加速度処理を簡素化（階段状動作を防ぐ）
-        if (speed > cfg->speed_threshold) {
-            if (speed >= cfg->speed_max) {
-                factor = cfg->max_factor;
-            } else {
-                // 線形補間で滑らかな加速度
-                uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-                uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-                uint32_t speed_offset = speed - cfg->speed_threshold;
-                factor = cfg->min_factor + ((factor_range * speed_offset) / speed_range);
-                if (factor > cfg->max_factor) factor = cfg->max_factor;
-            }
-        }
-
-        // シンプルなX/Y軸処理
-        int32_t accelerated_x = (dx * factor) / 1000;
-        int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
-        
-        // Y軸の最小感度を保証
-        if (abs(accelerated_y) < abs(dy * 2)) {
-            accelerated_y = dy * 3; // 最低でも3倍
-        }
-        
-
-        
-
-        
-
-
-        // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
-        // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
-        // input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_NO_WAIT);
 
         // 端数処理を無効化（階段状動作を防ぐ）
         if (false && cfg->track_remainders) {
@@ -295,7 +255,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-        // X/Y両方のイベントを確実に送信
+    // X軸イベントを送信（値がある場合のみ）
+    if (accelerated_x != 0) {
         struct input_event out_x = *event;
         out_x.code = INPUT_REL_X;
         out_x.value = accelerated_x;
@@ -303,7 +264,10 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         if (ret_x == 1) {
             input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
         }
+    }
 
+    // Y軸イベントを送信（値がある場合のみ）
+    if (accelerated_y != 0) {
         struct input_event out_y = *event;
         out_y.code = INPUT_REL_Y;
         out_y.value = accelerated_y;
@@ -311,20 +275,14 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         if (ret_y == 1) {
             input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_FOREVER);
         }
-        
-        // printk("PAIR SENT: X=%d, Y=%d\n", accelerated_x, accelerated_y);
-
-
-        // 状態クリア
-        data->has_pending_x = false;
-        data->has_pending_y = false;
-        data->last_time = current_time;
-
-        // 既に両方出力したので、元のeventは処理しない
-        return 1;
     }
 
-    // --- すべてペア処理で処理されるため、ここには到達しない ---
+    // 状態更新
+    data->last_time = current_time;
+
+    // ベクトル処理で処理済み
+    return 1;
+
     return 0;
 }
 
