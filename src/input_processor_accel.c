@@ -226,19 +226,34 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
     
-    // 単独処理を避けるため、ペンディングデータがない場合は現在のイベントを保存して待機
-    if (!has_pair && !data->has_pending_x && !data->has_pending_y) {
-        // 最初のイベントは保存して次のイベントを待つ
+    // 単独処理を完全に避けるため、常にペア処理を強制
+    if (!has_pair) {
         if (event->code == INPUT_REL_X) {
-            data->pending_x = event->value;
-            data->pending_x_time = current_time;
-            data->has_pending_x = true;
-            return 0; // イベントを保留
+            if (!data->has_pending_y) {
+                // Y軸データがない場合は保存して待機
+                data->pending_x = event->value;
+                data->pending_x_time = current_time;
+                data->has_pending_x = true;
+                return 0; // イベントを保留
+            } else {
+                // Y軸データがある場合は強制ペア処理
+                has_pair = true;
+                dx = event->value;
+                dy = data->pending_y;
+            }
         } else if (event->code == INPUT_REL_Y) {
-            data->pending_y = event->value;
-            data->pending_y_time = current_time;
-            data->has_pending_y = true;
-            return 0; // イベントを保留
+            if (!data->has_pending_x) {
+                // X軸データがない場合は保存して待機
+                data->pending_y = event->value;
+                data->pending_y_time = current_time;
+                data->has_pending_y = true;
+                return 0; // イベントを保留
+            } else {
+                // X軸データがある場合は強制ペア処理
+                has_pair = true;
+                dx = data->pending_x;
+                dy = event->value;
+            }
         }
     }
 
@@ -289,8 +304,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
         
-        // X軸の飛びを抑制するため、異常に大きな値を制限（ペア処理時は緩和）
-        int32_t max_x_change = abs(dx) * 3; // 元の値の3倍まで（ペア処理時は緩和）
+        // X軸の制限を緩和（Y軸とのバランスを重視）
+        int32_t max_x_change = abs(dx) * 5; // 元の値の5倍まで（大幅緩和）
         if (abs(accelerated_x) > max_x_change) {
             if (accelerated_x > 0) {
                 accelerated_x = max_x_change;
@@ -299,48 +314,17 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
         
-        // X軸専用の最大倍率制限（斜め動作時は制限を緩和）
-        if (is_diagonal) {
-            // 斜め動作時はX軸とY軸のバランスを重視
-            int32_t x_max_factor = factor; // 同じfactorを使用
-            int32_t x_limited_value = (dx * x_max_factor) / 1000;
-            if (abs(accelerated_x) > abs(x_limited_value)) {
-                accelerated_x = x_limited_value;
-            }
-        } else {
-            // 通常時は制限を適用
-            int32_t x_max_factor = (cfg->max_factor * 70) / 100;
-            int32_t x_limited_value = (dx * x_max_factor) / 1000;
-            if (abs(accelerated_x) > abs(x_limited_value)) {
-                accelerated_x = x_limited_value;
-            }
-        }
+        // X軸とY軸で同じ制限を適用（バランスを統一）
+        // X軸の制限は削除し、Y軸と同じ処理にする
         
-        // さらに絶対的な上限も設定（斜め動作時はさらに緩和）
-        int32_t x_abs_limit = is_diagonal ? 40 : 25; // 斜め動作時は40まで
-        if (abs(accelerated_x) > x_abs_limit) {
-            if (accelerated_x > 0) {
-                accelerated_x = x_abs_limit;
-            } else {
-                accelerated_x = -x_abs_limit;
-            }
-        }
+        // X軸の絶対上限を削除（Y軸とのバランスを重視）
 
-        int32_t accelerated_y = (int32_t)(((int64_t)dy * factor) / 1000);
-        // アスペクト比スケーリングを適用
-        accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
+        // Y軸の計算を簡素化（一度の計算でスケーリングも適用）
+        int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
         
-        // ペア処理時もY軸の最小感度を保証（斜め動作時は調整）
-        if (is_diagonal) {
-            // 斜め動作時はX軸とのバランスを重視
-            if (abs(accelerated_y) < abs(dy)) {
-                accelerated_y = dy * 1.5; // 控えめな補正
-            }
-        } else {
-            // 通常時は強めの補正
-            if (abs(accelerated_y) < abs(dy * 1.5)) {
-                accelerated_y = dy * 2; // 最低でも2倍
-            }
+        // Y軸の最小感度保証を統一（バランスを重視）
+        if (abs(accelerated_y) < abs(dy)) {
+            accelerated_y = (dy * cfg->y_aspect_scale) / 1000; // スケーリングのみ適用
         }
         
 
@@ -395,7 +379,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         return 1;
     }
 
-    // --- ここから単独軸の加速度処理 ---（階段状動作を最小限に抑制）
+    // --- 単独軸処理を最小限に抑制 ---
+    // 階段状動作を防ぐため、単独処理は簡素化
     
     // 単独処理でも最近のペンディングデータがあれば疑似ペア処理を試行
     if ((event->code == INPUT_REL_X && data->has_pending_y) ||
