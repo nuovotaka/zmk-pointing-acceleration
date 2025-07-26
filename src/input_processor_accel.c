@@ -17,7 +17,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
-#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 6000
+#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 4000
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR
@@ -25,7 +25,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1800
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1600
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
@@ -221,7 +221,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
-        if (speed > 15000) speed = 15000; // 異常に高い速度を制限
+        if (speed > 12000) speed = 12000; // 異常に高い速度を制限
 
         uint16_t factor = cfg->min_factor;
         if (speed > cfg->speed_threshold) {
@@ -247,14 +247,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_x = (dx * factor) / 1000;
 
         int32_t accelerated_y = (int32_t)(((int64_t)dy * factor) / 1000);
-        // Y軸に基本的な1.5倍を適用
-        accelerated_y = (accelerated_y * 3) / 2;
-        // その後、アスペクト比スケーリングを適用
+        // アスペクト比スケーリングを適用
         accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
         
         // ペア処理時もY軸の最小感度を保証
-        if (abs(accelerated_y) < abs(dy * 4)) {
-            accelerated_y = dy * 5; // 最低でも5倍
+        if (abs(accelerated_y) < abs(dy * 2)) {
+            accelerated_y = dy * 3; // 最低でも3倍（緩和）
         }
         
 
@@ -316,7 +314,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     if (time_delta > 200) time_delta = 200; // 最大200msに制限
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
-    if (speed > 15000) speed = 15000; // 異常に高い速度を制限
+    if (speed > 12000) speed = 12000; // 異常に高い速度を制限
     // DPIに基づく調整係数を計算（基準DPI: 1600）
     uint32_t dpi_factor = (1600 * 1000) / cfg->sensor_dpi; // 1000倍スケール
     
@@ -326,8 +324,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     uint16_t y_scale = (cfg->y_aspect_scale * dpi_factor) / 1000;
     
     if (event->code == INPUT_REL_Y) {
-        threshold = threshold / 5; // Y軸は1/5の閾値
-        min_factor = cfg->min_factor + (700 * dpi_factor) / 1000; // DPIに応じた最小倍率をさらに上げる
+        threshold = threshold / 3; // Y軸は1/3の閾値（緩和）
+        min_factor = cfg->min_factor + (300 * dpi_factor) / 1000; // DPIに応じた最小倍率を緩和
     }
     
     uint16_t factor = min_factor;
@@ -351,11 +349,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             // 加速度の急激な変化を抑制（スムージング）
             if (data->last_factor > 0) {
                 int32_t factor_diff = factor - data->last_factor;
-                if (abs(factor_diff) > 200) { // 0.2倍以上の変化を制限
+                if (abs(factor_diff) > 100) { // 0.1倍以上の変化を制限（より滑らか）
                     if (factor_diff > 0) {
-                        factor = data->last_factor + 200;
+                        factor = data->last_factor + 100;
                     } else {
-                        factor = data->last_factor - 200;
+                        factor = data->last_factor - 100;
                     }
                 }
             }
@@ -367,14 +365,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // Y軸の場合はアスペクト比スケーリングを適用
     if (event->code == INPUT_REL_Y) {
         int32_t before_scale = accelerated_value;
-        // まず基本的な1.5倍を適用
-        accelerated_value = (accelerated_value * 3) / 2;
-        // その後、アスペクト比スケーリングを適用
+        // アスペクト比スケーリングを適用
         accelerated_value = (int32_t)(((int64_t)accelerated_value * y_scale) / 1000);
         
         // Y軸の最小感度を保証（元の値が小さすぎる場合）
-        if (abs(accelerated_value) < abs(event->value * 4)) {
-            accelerated_value = event->value * 5; // 最低でも5倍
+        if (abs(accelerated_value) < abs(event->value * 2)) {
+            accelerated_value = event->value * 3; // 最低でも3倍（緩和）
         }
         
 
