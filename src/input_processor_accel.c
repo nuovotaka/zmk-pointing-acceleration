@@ -13,7 +13,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 20
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 30
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -198,17 +198,31 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     // ペアが見つからない場合、古いペンディングデータをクリアして単独処理に進む
     if (!has_pair) {
-        // 現在のイベントより古いペンディングデータがあればクリア（より長い時間待機）
+        // 現在のイベントより古いペンディングデータがあればクリア（さらに長い時間待機）
         if (event->code == INPUT_REL_X && data->has_pending_y) {
             int64_t y_age = llabs(current_time - data->pending_y_time);
-            if (y_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
+            if (y_age > cfg->pair_window_ms * 3) { // 3倍の時間待機
                 data->has_pending_y = false;
             }
         } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
             int64_t x_age = llabs(current_time - data->pending_x_time);
-            if (x_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
+            if (x_age > cfg->pair_window_ms * 3) { // 3倍の時間待機
                 data->has_pending_x = false;
             }
+        }
+    }
+
+    // ペアが見つからなくても、片方のペンディングデータがあれば強制ペア処理を試行
+    if (!has_pair && ((event->code == INPUT_REL_X && data->has_pending_y) || 
+                      (event->code == INPUT_REL_Y && data->has_pending_x))) {
+        // 強制ペア処理
+        has_pair = true;
+        if (event->code == INPUT_REL_X) {
+            dx = event->value;
+            dy = data->pending_y;
+        } else {
+            dx = data->pending_x;
+            dy = event->value;
         }
     }
 
@@ -426,16 +440,16 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // アスペクト比スケーリングを適用
         accelerated_value = (int32_t)(((int64_t)accelerated_value * y_scale) / 1000);
         
-        // Y軸の最小感度を保証（元の値が小さすぎる場合）
-        if (abs(accelerated_value) < abs(event->value * 2)) {
-            accelerated_value = event->value * 3; // 最低でも3倍（緩和）
+        // Y軸の最小感度を保証（階段状動作を防ぐため緩和）
+        if (abs(accelerated_value) < abs(event->value * 1.5)) {
+            accelerated_value = event->value * 2; // 最低でも2倍（緩和）
         }
     } else if (event->code == INPUT_REL_X) {
         // 一時的にX軸の加速度を完全に無効化（テスト用）
         // accelerated_value = event->value; // この行のコメントを外すとX軸加速度無効
         
-        // X軸専用の最大倍率制限（大幅に制限）
-        int32_t x_max_factor = (cfg->max_factor * 50) / 100; // 最大倍率の50%
+        // X軸専用の最大倍率制限（階段状動作を防ぐため緩和）
+        int32_t x_max_factor = (cfg->max_factor * 70) / 100; // 最大倍率の70%（緩和）
         int32_t x_limited_value = (event->value * x_max_factor) / 1000;
         if (abs(accelerated_value) > abs(x_limited_value)) {
             accelerated_value = x_limited_value;
@@ -450,19 +464,22 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
         
-        // X軸の飛びを抑制するため、異常に大きな値を制限
-        int32_t max_change = abs(event->value) * 2; // 元の値の2倍まで（さらに厳しく）
+        // X軸の飛びを抑制するため、異常に大きな値を制限（階段状動作を防ぐため緩和）
+        int32_t max_change = abs(event->value) * 3; // 元の値の3倍まで（緩和）
         if (abs(accelerated_value) > max_change) {
-            // 極端な場合は加速度を無効化して元の値を使用
-            accelerated_value = event->value;
+            if (accelerated_value > 0) {
+                accelerated_value = max_change;
+            } else {
+                accelerated_value = -max_change;
+            }
         }
         
-        // さらに絶対的な上限も設定
-        if (abs(accelerated_value) > 10) { // 絶対値10を上限（さらに厳しく）
+        // さらに絶対的な上限も設定（階段状動作を防ぐため緩和）
+        if (abs(accelerated_value) > 20) { // 絶対値20を上限（緩和）
             if (accelerated_value > 0) {
-                accelerated_value = 10;
+                accelerated_value = 20;
             } else {
-                accelerated_value = -10;
+                accelerated_value = -20;
             }
         }
     }
