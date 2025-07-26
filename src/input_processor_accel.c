@@ -13,7 +13,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 10
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 12
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -25,11 +25,11 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 2000
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1800
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
-#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 800
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 600
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX
@@ -69,6 +69,8 @@ struct accel_data {
     int64_t pending_y_time;
     bool has_pending_x;
     bool has_pending_y;
+    
+    uint16_t last_factor; // 前回の加速度係数を記録
 };
 
 int input_processor_forward_event(const struct device *dev,
@@ -214,11 +216,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // ペア時の加速度計算
         int64_t time_delta = current_time - data->last_time;
         if (time_delta <= 0) time_delta = 1;
-        if (time_delta > 100) time_delta = 100; // 最大100msに制限
+        if (time_delta < 2) time_delta = 2;     // 最小2msに制限（高ポーリングレート対応）
+        if (time_delta > 200) time_delta = 200; // 最大200msに制限
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
-        if (speed > 10000) speed = 10000; // 異常に高い速度を制限
+        if (speed > 15000) speed = 15000; // 異常に高い速度を制限
 
         uint16_t factor = cfg->min_factor;
         if (speed > cfg->speed_threshold) {
@@ -306,10 +309,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // --- ここから単独軸の加速度処理 ---
     int64_t time_delta = current_time - data->last_time;
     if (time_delta <= 0) time_delta = 1;
-    if (time_delta > 100) time_delta = 100; // 最大100msに制限
+    if (time_delta < 2) time_delta = 2;     // 最小2msに制限（高ポーリングレート対応）
+    if (time_delta > 200) time_delta = 200; // 最大200msに制限
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
-    if (speed > 10000) speed = 10000; // 異常に高い速度を制限
+    if (speed > 15000) speed = 15000; // 異常に高い速度を制限
     // DPIに基づく調整係数を計算（基準DPI: 1600）
     uint32_t dpi_factor = (1600 * 1000) / cfg->sensor_dpi; // 1000倍スケール
     
@@ -340,6 +344,18 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
             factor = min_factor + ((factor_range * accelerated_speed) / 1000);
             if (factor > cfg->max_factor) factor = cfg->max_factor;
+            
+            // 加速度の急激な変化を抑制（スムージング）
+            if (data->last_factor > 0) {
+                int32_t factor_diff = factor - data->last_factor;
+                if (abs(factor_diff) > 200) { // 0.2倍以上の変化を制限
+                    if (factor_diff > 0) {
+                        factor = data->last_factor + 200;
+                    } else {
+                        factor = data->last_factor - 200;
+                    }
+                }
+            }
         }
     }
 
@@ -375,6 +391,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     // 状態更新
     data->last_time = current_time;
+    data->last_factor = factor;
 
     // 加速値をeventに反映
     event->value = accelerated_value;
