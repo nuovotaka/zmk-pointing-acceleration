@@ -255,26 +255,23 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-    // X軸イベントを送信（値がある場合のみ）
-    if (accelerated_x != 0) {
-        struct input_event out_x = *event;
-        out_x.code = INPUT_REL_X;
-        out_x.value = accelerated_x;
-        int ret_x = input_processor_forward_event(dev, &out_x, param1, param2, state);
-        if (ret_x == 1) {
-            input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
-        }
-    }
+    // X軸とY軸を必ず順序立てて送信
+    
+    // X軸イベントを送信（K_NO_WAIT）
+    struct input_event out_x = *event;
+    out_x.code = INPUT_REL_X;
+    out_x.value = accelerated_x;
+    int ret_x = input_processor_forward_event(dev, &out_x, param1, param2, state);
 
-    // Y軸イベントを送信（値がある場合のみ）
-    if (accelerated_y != 0) {
-        struct input_event out_y = *event;
-        out_y.code = INPUT_REL_Y;
-        out_y.value = accelerated_y;
-        int ret_y = input_processor_forward_event(dev, &out_y, param1, param2, state);
-        if (ret_y == 1) {
-            input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_FOREVER);
-        }
+    // Y軸イベントを送信（K_FOREVER）
+    struct input_event out_y = *event;
+    out_y.code = INPUT_REL_Y;
+    out_y.value = accelerated_y;
+    int ret_y = input_processor_forward_event(dev, &out_y, param1, param2, state);
+
+    if (ret_x == 1 || ret_y == 1) {
+        input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
+        input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_FOREVER);
     }
 
     // 状態更新
