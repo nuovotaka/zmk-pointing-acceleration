@@ -236,7 +236,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
 
-        int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
+        int32_t accelerated_y = (int32_t)(((int64_t)dy * factor) / 1000);
+        accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
+        
+        // デバッグ用（必要に応じてコメントアウト）
+        // printk("Pair Y: dy=%d, factor=%d, before_scale=%d, after_scale=%d, scale=%d\n", 
+        //        dy, factor, (int32_t)(((int64_t)dy * factor) / 1000), accelerated_y, cfg->y_aspect_scale);
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
         // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
