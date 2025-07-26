@@ -3,6 +3,7 @@
 #include <zephyr/input/input.h>
 #include <zephyr/sys/printk.h>
 #include <math.h>
+#include <stdlib.h>
 #include <drivers/input_processor.h>
 
 
@@ -179,7 +180,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     bool has_pair = false;
     int32_t dx = 0, dy = 0;
     if (data->has_pending_x && data->has_pending_y) {
-        int64_t time_diff = abs(data->pending_x_time - data->pending_y_time);
+        int64_t time_diff = llabs(data->pending_x_time - data->pending_y_time);
         if (time_diff <= cfg->pair_window_ms) {
             has_pair = true;
             dx = data->pending_x;
@@ -191,12 +192,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     if (!has_pair) {
         // 現在のイベントより古いペンディングデータがあればクリア
         if (event->code == INPUT_REL_X && data->has_pending_y) {
-            int64_t y_age = current_time - data->pending_y_time;
+            int64_t y_age = llabs(current_time - data->pending_y_time);
             if (y_age > cfg->pair_window_ms) {
                 data->has_pending_y = false;
             }
         } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
-            int64_t x_age = current_time - data->pending_x_time;
+            int64_t x_age = llabs(current_time - data->pending_x_time);
             if (x_age > cfg->pair_window_ms) {
                 data->has_pending_x = false;
             }
@@ -298,8 +299,6 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
     if (speed > 10000) speed = 10000; // 異常に高い速度を制限
-    uint16_t factor = cfg->min_factor;
-    
     // Y軸の場合は低い閾値と高い最小倍率を使用
     uint32_t threshold = cfg->speed_threshold;
     uint16_t min_factor = cfg->min_factor;
