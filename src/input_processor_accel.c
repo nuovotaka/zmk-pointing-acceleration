@@ -13,7 +13,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 30
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 50
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -184,12 +184,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         data->has_pending_y = true;
     }
 
-    // ペア判定 - より柔軟な条件に変更
+    // ペア判定 - 非常に柔軟な条件に変更
     bool has_pair = false;
     int32_t dx = 0, dy = 0;
     if (data->has_pending_x && data->has_pending_y) {
         int64_t time_diff = llabs(data->pending_x_time - data->pending_y_time);
-        if (time_diff <= cfg->pair_window_ms) {
+        if (time_diff <= cfg->pair_window_ms * 2) { // 時間窓を2倍に拡大
             has_pair = true;
             dx = data->pending_x;
             dy = data->pending_y;
@@ -198,15 +198,15 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     // ペアが見つからない場合、古いペンディングデータをクリアして単独処理に進む
     if (!has_pair) {
-        // 現在のイベントより古いペンディングデータがあればクリア（さらに長い時間待機）
+        // 現在のイベントより古いペンディングデータがあればクリア（非常に長い時間待機）
         if (event->code == INPUT_REL_X && data->has_pending_y) {
             int64_t y_age = llabs(current_time - data->pending_y_time);
-            if (y_age > cfg->pair_window_ms * 3) { // 3倍の時間待機
+            if (y_age > cfg->pair_window_ms * 5) { // 5倍の時間待機
                 data->has_pending_y = false;
             }
         } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
             int64_t x_age = llabs(current_time - data->pending_x_time);
-            if (x_age > cfg->pair_window_ms * 3) { // 3倍の時間待機
+            if (x_age > cfg->pair_window_ms * 5) { // 5倍の時間待機
                 data->has_pending_x = false;
             }
         }
@@ -215,7 +215,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // ペアが見つからなくても、片方のペンディングデータがあれば強制ペア処理を試行
     if (!has_pair && ((event->code == INPUT_REL_X && data->has_pending_y) || 
                       (event->code == INPUT_REL_Y && data->has_pending_x))) {
-        // 強制ペア処理
+        // 時間差があっても強制的にペア処理（階段状動作を防ぐ）
         has_pair = true;
         if (event->code == INPUT_REL_X) {
             dx = event->value;
@@ -223,6 +223,22 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         } else {
             dx = data->pending_x;
             dy = event->value;
+        }
+    }
+    
+    // 単独処理を避けるため、ペンディングデータがない場合は現在のイベントを保存して待機
+    if (!has_pair && !data->has_pending_x && !data->has_pending_y) {
+        // 最初のイベントは保存して次のイベントを待つ
+        if (event->code == INPUT_REL_X) {
+            data->pending_x = event->value;
+            data->pending_x_time = current_time;
+            data->has_pending_x = true;
+            return 0; // イベントを保留
+        } else if (event->code == INPUT_REL_Y) {
+            data->pending_y = event->value;
+            data->pending_y_time = current_time;
+            data->has_pending_y = true;
+            return 0; // イベントを保留
         }
     }
 
@@ -379,7 +395,23 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         return 1;
     }
 
-    // --- ここから単独軸の加速度処理 ---
+    // --- ここから単独軸の加速度処理 ---（階段状動作を最小限に抑制）
+    
+    // 単独処理でも最近のペンディングデータがあれば疑似ペア処理を試行
+    if ((event->code == INPUT_REL_X && data->has_pending_y) ||
+        (event->code == INPUT_REL_Y && data->has_pending_x)) {
+        // 疑似ペア処理として、現在のイベントと最近のペンディングデータを組み合わせ
+        int32_t pseudo_dx = event->code == INPUT_REL_X ? event->value : data->pending_x;
+        int32_t pseudo_dy = event->code == INPUT_REL_Y ? event->value : data->pending_y;
+        
+        // 疑似ペア処理の結果を単独処理の参考にする
+        float pseudo_ratio = (float)abs(pseudo_dx) / (abs(pseudo_dy) + 1); // ゼロ除算回避
+        if (pseudo_ratio > 0.2 && pseudo_ratio < 5.0) {
+            // 斜め動作の可能性が高い場合、加速度を抑制
+            event->value = (event->value * 80) / 100; // 20%抑制
+        }
+    }
+    
     int64_t time_delta = current_time - data->last_time;
     if (time_delta <= 0) time_delta = 1;
     if (time_delta < 2) time_delta = 2;     // 最小2msに制限（高ポーリングレート対応）
