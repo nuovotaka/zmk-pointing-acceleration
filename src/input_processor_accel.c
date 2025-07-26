@@ -227,13 +227,17 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         bool is_diagonal = false;
         if (abs(dx) > 0 && abs(dy) > 0) {
             float ratio = (float)abs(dx) / abs(dy);
-            if (ratio > 0.3 && ratio < 3.0) { // 斜め動作と判定
+            if (ratio > 0.2 && ratio < 5.0) { // より広い範囲で斜め動作と判定
                 is_diagonal = true;
             }
         }
 
         uint16_t factor = cfg->min_factor;
-        if (speed > cfg->speed_threshold) {
+        
+        // 斜め動作時は加速度を抑制して滑らかに
+        if (is_diagonal) {
+            factor = cfg->min_factor + ((cfg->max_factor - cfg->min_factor) / 3); // より控えめな加速度
+        } else if (speed > cfg->speed_threshold) {
             if (speed >= cfg->speed_max) {
                 factor = cfg->max_factor;
             } else {
@@ -265,20 +269,30 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
         
-        // X軸専用の最大倍率制限（斜め動作時はさらに緩和）
-        int32_t x_factor_percent = is_diagonal ? 90 : 70; // 斜め動作時は90%
-        int32_t x_max_factor = (cfg->max_factor * x_factor_percent) / 100;
-        int32_t x_limited_value = (dx * x_max_factor) / 1000;
-        if (abs(accelerated_x) > abs(x_limited_value)) {
-            accelerated_x = x_limited_value;
+        // X軸専用の最大倍率制限（斜め動作時は制限を緩和）
+        if (is_diagonal) {
+            // 斜め動作時はX軸とY軸のバランスを重視
+            int32_t x_max_factor = factor; // 同じfactorを使用
+            int32_t x_limited_value = (dx * x_max_factor) / 1000;
+            if (abs(accelerated_x) > abs(x_limited_value)) {
+                accelerated_x = x_limited_value;
+            }
+        } else {
+            // 通常時は制限を適用
+            int32_t x_max_factor = (cfg->max_factor * 70) / 100;
+            int32_t x_limited_value = (dx * x_max_factor) / 1000;
+            if (abs(accelerated_x) > abs(x_limited_value)) {
+                accelerated_x = x_limited_value;
+            }
         }
         
-        // さらに絶対的な上限も設定（ペア処理時は緩和）
-        if (abs(accelerated_x) > 25) { // 絶対値25を上限（ペア処理時は緩和）
+        // さらに絶対的な上限も設定（斜め動作時はさらに緩和）
+        int32_t x_abs_limit = is_diagonal ? 40 : 25; // 斜め動作時は40まで
+        if (abs(accelerated_x) > x_abs_limit) {
             if (accelerated_x > 0) {
-                accelerated_x = 25;
+                accelerated_x = x_abs_limit;
             } else {
-                accelerated_x = -25;
+                accelerated_x = -x_abs_limit;
             }
         }
 
@@ -286,9 +300,17 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // アスペクト比スケーリングを適用
         accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
         
-        // ペア処理時もY軸の最小感度を保証（ペア処理時は緩和）
-        if (abs(accelerated_y) < abs(dy * 1.5)) {
-            accelerated_y = dy * 2; // 最低でも2倍（ペア処理時は緩和）
+        // ペア処理時もY軸の最小感度を保証（斜め動作時は調整）
+        if (is_diagonal) {
+            // 斜め動作時はX軸とのバランスを重視
+            if (abs(accelerated_y) < abs(dy)) {
+                accelerated_y = dy * 1.5; // 控えめな補正
+            }
+        } else {
+            // 通常時は強めの補正
+            if (abs(accelerated_y) < abs(dy * 1.5)) {
+                accelerated_y = dy * 2; // 最低でも2倍
+            }
         }
         
 
