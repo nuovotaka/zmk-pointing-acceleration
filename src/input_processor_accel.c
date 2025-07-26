@@ -25,7 +25,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1100
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1050
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
@@ -212,19 +212,19 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
 
-    // シンプルなペア処理
+    // 強制ペア処理システム - 常にペア処理を行う
     if (!has_pair) {
-        // 片方のペンディングデータがあれば即座にペア処理
-        if (event->code == INPUT_REL_X && data->has_pending_y) {
+        // 片方の軸がない場合は0として処理
+        if (event->code == INPUT_REL_X) {
             has_pair = true;
             dx = event->value;
-            dy = data->pending_y;
-            data->has_pending_y = false; // 使用済みをクリア
-        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
+            dy = data->has_pending_y ? data->pending_y : 0;
+            data->has_pending_y = false; // クリア
+        } else if (event->code == INPUT_REL_Y) {
             has_pair = true;
-            dx = data->pending_x;
+            dx = data->has_pending_x ? data->pending_x : 0;
             dy = event->value;
-            data->has_pending_x = false; // 使用済みをクリア
+            data->has_pending_x = false; // クリア
         }
     }
 
@@ -318,56 +318,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         return 1;
     }
 
-    // --- 単独軸処理（簡素化版） ---
-    
-
-    
-    // ペンディングデータを保存
-    if (event->code == INPUT_REL_X) {
-        data->pending_x = event->value;
-        data->pending_x_time = current_time;
-        data->has_pending_x = true;
-    } else if (event->code == INPUT_REL_Y) {
-        data->pending_y = event->value;
-        data->pending_y_time = current_time;
-        data->has_pending_y = true;
-    }
-    
-    // 簡単な加速度処理
-    int64_t single_time_delta = current_time - data->last_time;
-    if (single_time_delta <= 0) single_time_delta = 1;
-    if (single_time_delta > 100) single_time_delta = 100;
-    
-    uint32_t speed = (abs(event->value) * 1000) / single_time_delta;
-    uint16_t factor = cfg->min_factor;
-    if (speed > cfg->speed_threshold) {
-        if (speed >= cfg->speed_max) {
-            factor = cfg->max_factor;
-        } else {
-            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-            uint32_t speed_offset = speed - cfg->speed_threshold;
-            factor = cfg->min_factor + ((factor_range * speed_offset) / speed_range);
-        }
-    }
-    
-    int32_t accelerated_value = (event->value * factor) / 1000;
-    
-    // Y軸の場合はスケーリング適用
-    if (event->code == INPUT_REL_Y) {
-        accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
-        // Y軸の最小感度を保証
-        if (abs(accelerated_value) < abs(event->value * 2)) {
-            accelerated_value = event->value * 3; // 最低でも3倍
-        }
-
-    }
-    
-    // 状態更新
-    data->last_time = current_time;
-    
-    // イベント送信
-    event->value = accelerated_value;
+    // --- 単独処理を完全に無効化 ---
+    // すべてのイベントはペア処理で処理されるため、ここには到達しない
+    return 0;
     int ret = input_processor_forward_event(dev, event, param1, param2, state);
     if (ret == 1) {
         input_report_rel(dev, event->code, event->value, true, K_FOREVER);
