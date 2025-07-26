@@ -212,19 +212,21 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
 
-    // 強制ペア処理システム - 常にペア処理を行う
+    // ペア処理を優先するが、単独処理も許可
     if (!has_pair) {
-        // 片方の軸がない場合は0として処理
-        if (event->code == INPUT_REL_X) {
+        // ペンディングデータがある場合のみペア処理
+        if (event->code == INPUT_REL_X && data->has_pending_y) {
             has_pair = true;
             dx = event->value;
-            dy = data->has_pending_y ? data->pending_y : 0;
-            data->has_pending_y = false; // クリア
-        } else if (event->code == INPUT_REL_Y) {
+            dy = data->pending_y;
+            data->has_pending_y = false; // 使用済みをクリア
+            printk("PAIR TRIGGER: X=%d + pending Y=%d\n", dx, dy);
+        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
             has_pair = true;
-            dx = data->has_pending_x ? data->pending_x : 0;
+            dx = data->pending_x;
             dy = event->value;
-            data->has_pending_x = false; // クリア
+            data->has_pending_x = false; // 使用済みをクリア
+            printk("PAIR TRIGGER: pending X=%d + Y=%d\n", dx, dy);
         }
     }
 
@@ -262,6 +264,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         if (abs(accelerated_y) < abs(dy * 2)) {
             accelerated_y = dy * 3; // 最低でも3倍
         }
+        
+        printk("PAIR: dx=%d->%d, dy=%d->%d\n", dx, accelerated_x, dy, accelerated_y);
         
 
         
@@ -318,8 +322,31 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         return 1;
     }
 
-    // --- 単独処理を完全に無効化 ---
-    // すべてのイベントはペア処理で処理されるため、ここには到達しない
+    // --- 単独軸処理（必要最小限） ---
+    
+    printk("SINGLE: code=%d, value=%d\n", event->code, event->value);
+    
+    // 基本的な加速度処理
+    uint16_t factor = cfg->min_factor;
+    int32_t accelerated_value = (event->value * factor) / 1000;
+    
+    // Y軸の場合はスケーリング適用
+    if (event->code == INPUT_REL_Y) {
+        int32_t before_scale = accelerated_value;
+        accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
+        printk("Y SINGLE: %d->%d->%d (scale=%d)\n", event->value, before_scale, accelerated_value, cfg->y_aspect_scale);
+    }
+    
+    // 状態更新
+    data->last_time = current_time;
+    
+    // イベント送信
+    event->value = accelerated_value;
+    int ret = input_processor_forward_event(dev, event, param1, param2, state);
+    if (ret == 1) {
+        input_report_rel(dev, event->code, event->value, true, K_FOREVER);
+    }
+    
     return 0;
     int ret = input_processor_forward_event(dev, event, param1, param2, state);
     if (ret == 1) {
