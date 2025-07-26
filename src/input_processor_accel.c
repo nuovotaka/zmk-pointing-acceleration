@@ -13,7 +13,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 12
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 20
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -198,15 +198,15 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     // ペアが見つからない場合、古いペンディングデータをクリアして単独処理に進む
     if (!has_pair) {
-        // 現在のイベントより古いペンディングデータがあればクリア
+        // 現在のイベントより古いペンディングデータがあればクリア（より長い時間待機）
         if (event->code == INPUT_REL_X && data->has_pending_y) {
             int64_t y_age = llabs(current_time - data->pending_y_time);
-            if (y_age > cfg->pair_window_ms) {
+            if (y_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
                 data->has_pending_y = false;
             }
         } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
             int64_t x_age = llabs(current_time - data->pending_x_time);
-            if (x_age > cfg->pair_window_ms) {
+            if (x_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
                 data->has_pending_x = false;
             }
         }
@@ -221,7 +221,16 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
-        if (speed > 8000) speed = 8000; // 異常に高い速度を制限（より厳しく）
+        if (speed > 10000) speed = 10000; // 異常に高い速度を制限（ペア処理時は緩和）
+        
+        // 斜め動作の検出（X軸とY軸の比率が近い場合）
+        bool is_diagonal = false;
+        if (abs(dx) > 0 && abs(dy) > 0) {
+            float ratio = (float)abs(dx) / abs(dy);
+            if (ratio > 0.3 && ratio < 3.0) { // 斜め動作と判定
+                is_diagonal = true;
+            }
+        }
 
         uint16_t factor = cfg->min_factor;
         if (speed > cfg->speed_threshold) {
@@ -246,26 +255,30 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
         
-        // X軸の飛びを抑制するため、異常に大きな値を制限
-        int32_t max_x_change = abs(dx) * 2; // 元の値の2倍まで（さらに厳しく）
+        // X軸の飛びを抑制するため、異常に大きな値を制限（ペア処理時は緩和）
+        int32_t max_x_change = abs(dx) * 3; // 元の値の3倍まで（ペア処理時は緩和）
         if (abs(accelerated_x) > max_x_change) {
-            // 極端な場合は加速度を無効化して元の値を使用
-            accelerated_x = dx;
+            if (accelerated_x > 0) {
+                accelerated_x = max_x_change;
+            } else {
+                accelerated_x = -max_x_change;
+            }
         }
         
-        // X軸専用の最大倍率制限
-        int32_t x_max_factor = (cfg->max_factor * 50) / 100; // 最大倍率の50%
+        // X軸専用の最大倍率制限（斜め動作時はさらに緩和）
+        int32_t x_factor_percent = is_diagonal ? 90 : 70; // 斜め動作時は90%
+        int32_t x_max_factor = (cfg->max_factor * x_factor_percent) / 100;
         int32_t x_limited_value = (dx * x_max_factor) / 1000;
         if (abs(accelerated_x) > abs(x_limited_value)) {
             accelerated_x = x_limited_value;
         }
         
-        // さらに絶対的な上限も設定
-        if (abs(accelerated_x) > 15) { // 絶対値15を上限（さらに厳しく）
+        // さらに絶対的な上限も設定（ペア処理時は緩和）
+        if (abs(accelerated_x) > 25) { // 絶対値25を上限（ペア処理時は緩和）
             if (accelerated_x > 0) {
-                accelerated_x = 15;
+                accelerated_x = 25;
             } else {
-                accelerated_x = -15;
+                accelerated_x = -25;
             }
         }
 
@@ -273,9 +286,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // アスペクト比スケーリングを適用
         accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
         
-        // ペア処理時もY軸の最小感度を保証
-        if (abs(accelerated_y) < abs(dy * 2)) {
-            accelerated_y = dy * 3; // 最低でも3倍（緩和）
+        // ペア処理時もY軸の最小感度を保証（ペア処理時は緩和）
+        if (abs(accelerated_y) < abs(dy * 1.5)) {
+            accelerated_y = dy * 2; // 最低でも2倍（ペア処理時は緩和）
         }
         
 
