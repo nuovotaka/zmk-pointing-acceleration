@@ -328,11 +328,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     }
     
     // 簡単な加速度処理
-    int64_t time_delta = current_time - data->last_time;
-    if (time_delta <= 0) time_delta = 1;
-    if (time_delta > 100) time_delta = 100;
+    int64_t single_time_delta = current_time - data->last_time;
+    if (single_time_delta <= 0) single_time_delta = 1;
+    if (single_time_delta > 100) single_time_delta = 100;
     
-    uint32_t speed = (abs(event->value) * 1000) / time_delta;
+    uint32_t speed = (abs(event->value) * 1000) / single_time_delta;
     uint16_t factor = cfg->min_factor;
     if (speed > cfg->speed_threshold) {
         if (speed >= cfg->speed_max) {
@@ -379,7 +379,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
     
-    int64_t time_delta = current_time - data->last_time;
+    // 古いコードの残骸を削除
+    return 0;
     if (time_delta <= 0) time_delta = 1;
     if (time_delta < 2) time_delta = 2;     // 最小2msに制限（高ポーリングレート対応）
     if (time_delta > 200) time_delta = 200; // 最大200msに制限
