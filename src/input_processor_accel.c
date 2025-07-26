@@ -229,9 +229,6 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     }
 
     if (has_pair) {
-        // シンプルなペア処理（デバッグ用）
-        // printk("PAIR PROCESSING: dx=%d, dy=%d\n", dx, dy);
-        
         // 基本的な時間と速度計算
         int64_t time_delta = current_time - data->last_time;
         if (time_delta <= 0) time_delta = 1;
