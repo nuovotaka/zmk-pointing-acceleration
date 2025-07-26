@@ -25,11 +25,11 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1600
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1400
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
-#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 600
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD 800
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX
@@ -245,6 +245,16 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
+        
+        // X軸の飛びを抑制するため、異常に大きな値を制限
+        int32_t max_x_change = abs(dx) * 4; // 元の値の4倍まで
+        if (abs(accelerated_x) > max_x_change) {
+            if (accelerated_x > 0) {
+                accelerated_x = max_x_change;
+            } else {
+                accelerated_x = -max_x_change;
+            }
+        }
 
         int32_t accelerated_y = (int32_t)(((int64_t)dy * factor) / 1000);
         // アスペクト比スケーリングを適用
@@ -349,11 +359,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             // 加速度の急激な変化を抑制（スムージング）
             if (data->last_factor > 0) {
                 int32_t factor_diff = factor - data->last_factor;
-                if (abs(factor_diff) > 100) { // 0.1倍以上の変化を制限（より滑らか）
+                if (abs(factor_diff) > 50) { // 0.05倍以上の変化を制限（さらに滑らか）
                     if (factor_diff > 0) {
-                        factor = data->last_factor + 100;
+                        factor = data->last_factor + 50;
                     } else {
-                        factor = data->last_factor - 100;
+                        factor = data->last_factor - 50;
                     }
                 }
             }
@@ -372,8 +382,16 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         if (abs(accelerated_value) < abs(event->value * 2)) {
             accelerated_value = event->value * 3; // 最低でも3倍（緩和）
         }
-        
-
+    } else if (event->code == INPUT_REL_X) {
+        // X軸の飛びを抑制するため、異常に大きな値を制限
+        int32_t max_change = abs(event->value) * 4; // 元の値の4倍まで
+        if (abs(accelerated_value) > max_change) {
+            if (accelerated_value > 0) {
+                accelerated_value = max_change;
+            } else {
+                accelerated_value = -max_change;
+            }
+        }
     }
 
     // 端数処理
