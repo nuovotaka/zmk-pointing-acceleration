@@ -42,3 +42,18 @@ properties:
   track-remainders:
     type: boolean
     description: Accumulate and apply fractional movement remainders for higher precision.
+
+  pair-window-ms:
+    type: int
+    default: 10
+    description: Time window in milliseconds to pair X/Y events for acceleration.
+
+  y-aspect-scale:
+    type: int
+    default: 1500
+    description: Scale factor for Y axis movement to adjust for screen aspect ratio (scaled by 1000, e.g. 1500 = 1.5x).
+
+  sensor-dpi:
+    type: int
+    default: 1600
+    description: Mouse sensor DPI/CPI setting. Used for automatic scaling adjustment. Higher DPI sensors will have reduced acceleration to prevent oversensitivity.
