@@ -25,7 +25,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1400
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1200
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
@@ -33,7 +33,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX
-#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX 4000
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX 3000
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_EXPONENT
@@ -221,7 +221,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
         uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
         uint32_t speed = (magnitude * 1000) / time_delta;
-        if (speed > 12000) speed = 12000; // 異常に高い速度を制限
+        if (speed > 8000) speed = 8000; // 異常に高い速度を制限（より厳しく）
 
         uint16_t factor = cfg->min_factor;
         if (speed > cfg->speed_threshold) {
@@ -247,12 +247,21 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_x = (dx * factor) / 1000;
         
         // X軸の飛びを抑制するため、異常に大きな値を制限
-        int32_t max_x_change = abs(dx) * 4; // 元の値の4倍まで
+        int32_t max_x_change = abs(dx) * 3; // 元の値の3倍まで（より厳しく）
         if (abs(accelerated_x) > max_x_change) {
             if (accelerated_x > 0) {
                 accelerated_x = max_x_change;
             } else {
                 accelerated_x = -max_x_change;
+            }
+        }
+        
+        // さらに絶対的な上限も設定
+        if (abs(accelerated_x) > 50) { // 絶対値50を上限
+            if (accelerated_x > 0) {
+                accelerated_x = 50;
+            } else {
+                accelerated_x = -50;
             }
         }
 
@@ -324,7 +333,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     if (time_delta > 200) time_delta = 200; // 最大200msに制限
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
-    if (speed > 12000) speed = 12000; // 異常に高い速度を制限
+    if (speed > 8000) speed = 8000; // 異常に高い速度を制限（より厳しく）
     // DPIに基づく調整係数を計算（基準DPI: 1600）
     uint32_t dpi_factor = (1600 * 1000) / cfg->sensor_dpi; // 1000倍スケール
     
@@ -383,13 +392,29 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             accelerated_value = event->value * 3; // 最低でも3倍（緩和）
         }
     } else if (event->code == INPUT_REL_X) {
+        // X軸専用の最大倍率制限（Y軸より低く）
+        int32_t x_max_factor = (cfg->max_factor * 80) / 100; // 最大倍率の80%
+        int32_t x_limited_value = (event->value * x_max_factor) / 1000;
+        if (abs(accelerated_value) > abs(x_limited_value)) {
+            accelerated_value = x_limited_value;
+        }
+        
         // X軸の飛びを抑制するため、異常に大きな値を制限
-        int32_t max_change = abs(event->value) * 4; // 元の値の4倍まで
+        int32_t max_change = abs(event->value) * 3; // 元の値の3倍まで（より厳しく）
         if (abs(accelerated_value) > max_change) {
             if (accelerated_value > 0) {
                 accelerated_value = max_change;
             } else {
                 accelerated_value = -max_change;
+            }
+        }
+        
+        // さらに絶対的な上限も設定
+        if (abs(accelerated_value) > 30) { // 絶対値30を上限（Y軸より低く）
+            if (accelerated_value > 0) {
+                accelerated_value = 30;
+            } else {
+                accelerated_value = -30;
             }
         }
     }
