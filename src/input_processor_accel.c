@@ -17,7 +17,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
-#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 4000
+#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 2000
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR
@@ -226,34 +226,17 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
     
-    // 単独処理を完全に避けるため、常にペア処理を強制
+    // 完全なペア処理強制システム
     if (!has_pair) {
+        // 常にペア処理を行うため、片方の軸がない場合は0として処理
         if (event->code == INPUT_REL_X) {
-            if (!data->has_pending_y) {
-                // Y軸データがない場合は保存して待機
-                data->pending_x = event->value;
-                data->pending_x_time = current_time;
-                data->has_pending_x = true;
-                return 0; // イベントを保留
-            } else {
-                // Y軸データがある場合は強制ペア処理
-                has_pair = true;
-                dx = event->value;
-                dy = data->pending_y;
-            }
+            dx = event->value;
+            dy = data->has_pending_y ? data->pending_y : 0;
+            has_pair = true;
         } else if (event->code == INPUT_REL_Y) {
-            if (!data->has_pending_x) {
-                // X軸データがない場合は保存して待機
-                data->pending_y = event->value;
-                data->pending_y_time = current_time;
-                data->has_pending_y = true;
-                return 0; // イベントを保留
-            } else {
-                // X軸データがある場合は強制ペア処理
-                has_pair = true;
-                dx = data->pending_x;
-                dy = event->value;
-            }
+            dx = data->has_pending_x ? data->pending_x : 0;
+            dy = event->value;
+            has_pair = true;
         }
     }
 
@@ -279,24 +262,16 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
         uint16_t factor = cfg->min_factor;
         
-        // 斜め動作時は加速度を抑制して滑らかに
-        if (is_diagonal) {
-            factor = cfg->min_factor + ((cfg->max_factor - cfg->min_factor) / 3); // より控えめな加速度
-        } else if (speed > cfg->speed_threshold) {
+        // 加速度処理を簡素化（階段状動作を防ぐ）
+        if (speed > cfg->speed_threshold) {
             if (speed >= cfg->speed_max) {
                 factor = cfg->max_factor;
             } else {
+                // 線形補間で滑らかな加速度
                 uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
                 uint32_t factor_range = cfg->max_factor - cfg->min_factor;
                 uint32_t speed_offset = speed - cfg->speed_threshold;
-                uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
-                uint32_t accelerated_speed = normalized_speed;
-                if (cfg->acceleration_exponent == 2) {
-                    accelerated_speed = (normalized_speed * normalized_speed) / 1000;
-                } else if (cfg->acceleration_exponent == 3) {
-                    accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
-                }
-                factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
+                factor = cfg->min_factor + ((factor_range * speed_offset) / speed_range);
                 if (factor > cfg->max_factor) factor = cfg->max_factor;
             }
         }
@@ -304,20 +279,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // X/Y両方の加速値を計算
         int32_t accelerated_x = (dx * factor) / 1000;
         
-        // X軸の制限を緩和（Y軸とのバランスを重視）
-        int32_t max_x_change = abs(dx) * 5; // 元の値の5倍まで（大幅緩和）
-        if (abs(accelerated_x) > max_x_change) {
-            if (accelerated_x > 0) {
-                accelerated_x = max_x_change;
-            } else {
-                accelerated_x = -max_x_change;
-            }
-        }
-        
-        // X軸とY軸で同じ制限を適用（バランスを統一）
-        // X軸の制限は削除し、Y軸と同じ処理にする
-        
-        // X軸の絶対上限を削除（Y軸とのバランスを重視）
+        // X軸の制限を完全に削除（Y軸とのバランスを重視）
 
         // Y軸の計算を簡素化（一度の計算でスケーリングも適用）
         int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
@@ -333,8 +295,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
         // input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_NO_WAIT);
 
-        // 端数処理
-        if (cfg->track_remainders) {
+        // 端数処理を無効化（階段状動作を防ぐ）
+        if (false && cfg->track_remainders) {
             int32_t rem_x = ((dx * factor) % 1000) / 100;
             int32_t rem_y = (int32_t)((((int64_t)dy * factor * cfg->y_aspect_scale) / 1000) % 1000) / 100;
             data->remainders[0] += rem_x;
@@ -379,8 +341,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         return 1;
     }
 
-    // --- 単独軸処理を最小限に抑制 ---
-    // 階段状動作を防ぐため、単独処理は簡素化
+    // --- 単独軸処理を完全に削除 ---
+    // すべてのイベントはペア処理で処理されるため、ここには到達しない
+    return 0;
     
     // 単独処理でも最近のペンディングデータがあれば疑似ペア処理を試行
     if ((event->code == INPUT_REL_X && data->has_pending_y) ||
