@@ -17,7 +17,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
-#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 3000
+#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 5000
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR
@@ -40,6 +40,10 @@
 #define CONFIG_INPUT_PROCESSOR_ACCEL_EXPONENT 2
 #endif
 
+#ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SENSOR_DPI
+#define CONFIG_INPUT_PROCESSOR_ACCEL_SENSOR_DPI 1600
+#endif
+
 struct accel_config {
     uint8_t input_type;
     const uint16_t *codes;
@@ -52,6 +56,7 @@ struct accel_config {
     uint8_t  acceleration_exponent;
     uint8_t  pair_window_ms;
     uint16_t y_aspect_scale;
+    uint16_t sensor_dpi;  // センサーDPI設定を追加
 };
 
 struct accel_data {
@@ -91,7 +96,8 @@ static const struct accel_config accel_config_##inst = {                       \
     .speed_max = DT_INST_PROP_OR(inst, speed_max, CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_MAX),                       \
     .acceleration_exponent = DT_INST_PROP_OR(inst, acceleration_exponent, CONFIG_INPUT_PROCESSOR_ACCEL_EXPONENT),  \
     .pair_window_ms = DT_INST_PROP_OR(inst, pair_window_ms, CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS), \
-    .y_aspect_scale = DT_INST_PROP_OR(inst, y_aspect_scale, CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE)  \
+    .y_aspect_scale = DT_INST_PROP_OR(inst, y_aspect_scale, CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE), \
+    .sensor_dpi = DT_INST_PROP_OR(inst, sensor_dpi, CONFIG_INPUT_PROCESSOR_ACCEL_SENSOR_DPI)  \
 };                                                                             \
 static struct accel_data accel_data_##inst = {0};                              \
 DEVICE_DT_INST_DEFINE(inst,                                                    \
@@ -240,6 +246,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_y = (int32_t)(((int64_t)dy * factor) / 1000);
         accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
         
+        // ペア処理時もY軸の最小感度を保証
+        if (abs(accelerated_y) < abs(dy * 3)) {
+            accelerated_y = dy * 4; // 最低でも4倍
+        }
+        
 
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
@@ -299,12 +310,17 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
 
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
     if (speed > 10000) speed = 10000; // 異常に高い速度を制限
+    // DPIに基づく調整係数を計算（基準DPI: 1600）
+    uint32_t dpi_factor = (1600 * 1000) / cfg->sensor_dpi; // 1000倍スケール
+    
     // Y軸の場合は低い閾値と高い最小倍率を使用
-    uint32_t threshold = cfg->speed_threshold;
+    uint32_t threshold = (cfg->speed_threshold * dpi_factor) / 1000;
     uint16_t min_factor = cfg->min_factor;
+    uint16_t y_scale = (cfg->y_aspect_scale * dpi_factor) / 1000;
+    
     if (event->code == INPUT_REL_Y) {
-        threshold = cfg->speed_threshold / 3; // Y軸は1/3の閾値
-        min_factor = cfg->min_factor + 200;   // Y軸は最小倍率を1.2倍に
+        threshold = threshold / 4; // Y軸は1/4の閾値
+        min_factor = cfg->min_factor + (500 * dpi_factor) / 1000; // DPIに応じた最小倍率
     }
     
     uint16_t factor = min_factor;
@@ -332,11 +348,11 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     // Y軸の場合はアスペクト比スケーリングを適用
     if (event->code == INPUT_REL_Y) {
         int32_t before_scale = accelerated_value;
-        accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
+        accelerated_value = (int32_t)(((int64_t)accelerated_value * y_scale) / 1000);
         
         // Y軸の最小感度を保証（元の値が小さすぎる場合）
-        if (abs(accelerated_value) < abs(event->value * 2)) {
-            accelerated_value = event->value * 3; // 最低でも3倍
+        if (abs(accelerated_value) < abs(event->value * 3)) {
+            accelerated_value = event->value * 4; // 最低でも4倍
         }
         
 

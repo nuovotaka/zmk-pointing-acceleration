@@ -64,3 +64,11 @@ config INPUT_PROCESSOR_ACCEL_EXPONENT
     depends on ZMK_INPUT_PROCESSOR_ACCELERATION
     help
       Exponent for acceleration curve. 1=linear, 2=quadratic, 3=cubic.
+
+config INPUT_PROCESSOR_ACCEL_SENSOR_DPI
+    int "Mouse sensor DPI/CPI setting"
+    default 1600
+    depends on ZMK_INPUT_PROCESSOR_ACCELERATION
+    help
+      DPI/CPI setting of the mouse sensor. Used for automatic scaling adjustment.
+      Higher DPI sensors will have reduced acceleration to prevent oversensitivity.
