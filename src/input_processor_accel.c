@@ -348,12 +348,6 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     }
     
     return 0;
-    int ret = input_processor_forward_event(dev, event, param1, param2, state);
-    if (ret == 1) {
-        input_report_rel(dev, event->code, event->value, true, K_FOREVER);
-    }
-    
-    return 0;
 }
 
 #endif // DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
