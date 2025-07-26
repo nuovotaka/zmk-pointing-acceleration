@@ -25,7 +25,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR
-#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1200
+#define CONFIG_INPUT_PROCESSOR_ACCEL_MAX_FACTOR 1100
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_SPEED_THRESHOLD
@@ -247,21 +247,25 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_x = (dx * factor) / 1000;
         
         // X軸の飛びを抑制するため、異常に大きな値を制限
-        int32_t max_x_change = abs(dx) * 3; // 元の値の3倍まで（より厳しく）
+        int32_t max_x_change = abs(dx) * 2; // 元の値の2倍まで（さらに厳しく）
         if (abs(accelerated_x) > max_x_change) {
-            if (accelerated_x > 0) {
-                accelerated_x = max_x_change;
-            } else {
-                accelerated_x = -max_x_change;
-            }
+            // 極端な場合は加速度を無効化して元の値を使用
+            accelerated_x = dx;
+        }
+        
+        // X軸専用の最大倍率制限
+        int32_t x_max_factor = (cfg->max_factor * 50) / 100; // 最大倍率の50%
+        int32_t x_limited_value = (dx * x_max_factor) / 1000;
+        if (abs(accelerated_x) > abs(x_limited_value)) {
+            accelerated_x = x_limited_value;
         }
         
         // さらに絶対的な上限も設定
-        if (abs(accelerated_x) > 50) { // 絶対値50を上限
+        if (abs(accelerated_x) > 15) { // 絶対値15を上限（さらに厳しく）
             if (accelerated_x > 0) {
-                accelerated_x = 50;
+                accelerated_x = 15;
             } else {
-                accelerated_x = -50;
+                accelerated_x = -15;
             }
         }
 
@@ -392,29 +396,38 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             accelerated_value = event->value * 3; // 最低でも3倍（緩和）
         }
     } else if (event->code == INPUT_REL_X) {
-        // X軸専用の最大倍率制限（Y軸より低く）
-        int32_t x_max_factor = (cfg->max_factor * 80) / 100; // 最大倍率の80%
+        // 一時的にX軸の加速度を完全に無効化（テスト用）
+        // accelerated_value = event->value; // この行のコメントを外すとX軸加速度無効
+        
+        // X軸専用の最大倍率制限（大幅に制限）
+        int32_t x_max_factor = (cfg->max_factor * 50) / 100; // 最大倍率の50%
         int32_t x_limited_value = (event->value * x_max_factor) / 1000;
         if (abs(accelerated_value) > abs(x_limited_value)) {
             accelerated_value = x_limited_value;
         }
         
-        // X軸の飛びを抑制するため、異常に大きな値を制限
-        int32_t max_change = abs(event->value) * 3; // 元の値の3倍まで（より厳しく）
-        if (abs(accelerated_value) > max_change) {
+        // X軸は最低でも元の値以下に制限
+        if (abs(accelerated_value) > abs(event->value * 2)) {
             if (accelerated_value > 0) {
-                accelerated_value = max_change;
+                accelerated_value = event->value * 2;
             } else {
-                accelerated_value = -max_change;
+                accelerated_value = event->value * 2 * -1;
             }
         }
         
+        // X軸の飛びを抑制するため、異常に大きな値を制限
+        int32_t max_change = abs(event->value) * 2; // 元の値の2倍まで（さらに厳しく）
+        if (abs(accelerated_value) > max_change) {
+            // 極端な場合は加速度を無効化して元の値を使用
+            accelerated_value = event->value;
+        }
+        
         // さらに絶対的な上限も設定
-        if (abs(accelerated_value) > 30) { // 絶対値30を上限（Y軸より低く）
+        if (abs(accelerated_value) > 10) { // 絶対値10を上限（さらに厳しく）
             if (accelerated_value > 0) {
-                accelerated_value = 30;
+                accelerated_value = 10;
             } else {
-                accelerated_value = -30;
+                accelerated_value = -10;
             }
         }
     }
