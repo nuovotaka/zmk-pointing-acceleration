@@ -16,7 +16,7 @@
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
-#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 1500
+#define CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE 3000
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_MIN_FACTOR
@@ -239,9 +239,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         int32_t accelerated_y = (int32_t)(((int64_t)dy * factor) / 1000);
         accelerated_y = (int32_t)(((int64_t)accelerated_y * cfg->y_aspect_scale) / 1000);
         
-        // デバッグ用（必要に応じてコメントアウト）
-        // printk("Pair Y: dy=%d, factor=%d, before_scale=%d, after_scale=%d, scale=%d\n", 
-        //        dy, factor, (int32_t)(((int64_t)dy * factor) / 1000), accelerated_y, cfg->y_aspect_scale);
+
 
         // 以降、加速度の有無やペア処理の有無に関係なく、Y軸はこの補正値を使う
         // input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
@@ -301,13 +299,23 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     uint32_t speed = (abs(event->value) * 1000) / time_delta;
     if (speed > 10000) speed = 10000; // 異常に高い速度を制限
     uint16_t factor = cfg->min_factor;
-    if (speed > cfg->speed_threshold) {
+    
+    // Y軸の場合は低い閾値と高い最小倍率を使用
+    uint32_t threshold = cfg->speed_threshold;
+    uint16_t min_factor = cfg->min_factor;
+    if (event->code == INPUT_REL_Y) {
+        threshold = cfg->speed_threshold / 3; // Y軸は1/3の閾値
+        min_factor = cfg->min_factor + 200;   // Y軸は最小倍率を1.2倍に
+    }
+    
+    uint16_t factor = min_factor;
+    if (speed > threshold) {
         if (speed >= cfg->speed_max) {
             factor = cfg->max_factor;
         } else {
-            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
-            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
-            uint32_t speed_offset = speed - cfg->speed_threshold;
+            uint32_t speed_range = cfg->speed_max - threshold;
+            uint32_t factor_range = cfg->max_factor - min_factor;
+            uint32_t speed_offset = speed - threshold;
             uint32_t normalized_speed = (speed_offset * 1000) / speed_range;
             uint32_t accelerated_speed = normalized_speed;
             if (cfg->acceleration_exponent == 2) {
@@ -315,7 +323,7 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             } else if (cfg->acceleration_exponent == 3) {
                 accelerated_speed = (normalized_speed * normalized_speed * normalized_speed) / (1000 * 1000);
             }
-            factor = cfg->min_factor + ((factor_range * accelerated_speed) / 1000);
+            factor = min_factor + ((factor_range * accelerated_speed) / 1000);
             if (factor > cfg->max_factor) factor = cfg->max_factor;
         }
     }
@@ -324,7 +332,15 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
     
     // Y軸の場合はアスペクト比スケーリングを適用
     if (event->code == INPUT_REL_Y) {
+        int32_t before_scale = accelerated_value;
         accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
+        
+        // Y軸の最小感度を保証（元の値が小さすぎる場合）
+        if (abs(accelerated_value) < abs(event->value * 2)) {
+            accelerated_value = event->value * 3; // 最低でも3倍
+        }
+        
+
     }
 
     // 端数処理
