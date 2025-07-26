@@ -13,7 +13,7 @@
 #define ACCEL_MAX_CODES 4
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS
-#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 50
+#define CONFIG_INPUT_PROCESSOR_ACCEL_PAIR_WINDOW_MS 15
 #endif
 
 #ifndef CONFIG_INPUT_PROCESSOR_ACCEL_Y_ASPECT_SCALE
@@ -196,70 +196,43 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         }
     }
     
-    // ペアが見つからない場合、古いペンディングデータをクリアして単独処理に進む
+    // ペアが見つからない場合、古いペンディングデータをクリア
     if (!has_pair) {
-        // 現在のイベントより古いペンディングデータがあればクリア（非常に長い時間待機）
+        // 古いペンディングデータをクリア（適度な時間で）
         if (event->code == INPUT_REL_X && data->has_pending_y) {
             int64_t y_age = llabs(current_time - data->pending_y_time);
-            if (y_age > cfg->pair_window_ms * 5) { // 5倍の時間待機
+            if (y_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
                 data->has_pending_y = false;
             }
         } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
             int64_t x_age = llabs(current_time - data->pending_x_time);
-            if (x_age > cfg->pair_window_ms * 5) { // 5倍の時間待機
+            if (x_age > cfg->pair_window_ms * 2) { // 2倍の時間待機
                 data->has_pending_x = false;
             }
         }
     }
 
-    // ペアが見つからなくても、片方のペンディングデータがあれば強制ペア処理を試行
-    if (!has_pair && ((event->code == INPUT_REL_X && data->has_pending_y) || 
-                      (event->code == INPUT_REL_Y && data->has_pending_x))) {
-        // 時間差があっても強制的にペア処理（階段状動作を防ぐ）
-        has_pair = true;
-        if (event->code == INPUT_REL_X) {
+    // シンプルなペア処理
+    if (!has_pair) {
+        // 片方のペンディングデータがあれば即座にペア処理
+        if (event->code == INPUT_REL_X && data->has_pending_y) {
+            has_pair = true;
             dx = event->value;
             dy = data->pending_y;
-        } else {
+            data->has_pending_y = false; // 使用済みをクリア
+        } else if (event->code == INPUT_REL_Y && data->has_pending_x) {
+            has_pair = true;
             dx = data->pending_x;
             dy = event->value;
-        }
-    }
-    
-    // 完全なペア処理強制システム
-    if (!has_pair) {
-        // 常にペア処理を行うため、片方の軸がない場合は0として処理
-        if (event->code == INPUT_REL_X) {
-            dx = event->value;
-            dy = data->has_pending_y ? data->pending_y : 0;
-            has_pair = true;
-        } else if (event->code == INPUT_REL_Y) {
-            dx = data->has_pending_x ? data->pending_x : 0;
-            dy = event->value;
-            has_pair = true;
+            data->has_pending_x = false; // 使用済みをクリア
         }
     }
 
     if (has_pair) {
-        // ペア時の加速度計算
-        int64_t time_delta = current_time - data->last_time;
-        if (time_delta <= 0) time_delta = 1;
-        if (time_delta < 2) time_delta = 2;     // 最小2msに制限（高ポーリングレート対応）
-        if (time_delta > 200) time_delta = 200; // 最大200msに制限
-
-        uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
-        uint32_t speed = (magnitude * 1000) / time_delta;
-        if (speed > 10000) speed = 10000; // 異常に高い速度を制限（ペア処理時は緩和）
+        // シンプルなペア処理（デバッグ用）
+        // printk("PAIR PROCESSING: dx=%d, dy=%d\n", dx, dy);
         
-        // 斜め動作の検出（X軸とY軸の比率が近い場合）
-        bool is_diagonal = false;
-        if (abs(dx) > 0 && abs(dy) > 0) {
-            float ratio = (float)abs(dx) / abs(dy);
-            if (ratio > 0.2 && ratio < 5.0) { // より広い範囲で斜め動作と判定
-                is_diagonal = true;
-            }
-        }
-
+        // 基本的な加速度処理
         uint16_t factor = cfg->min_factor;
         
         // 加速度処理を簡素化（階段状動作を防ぐ）
@@ -276,18 +249,9 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-        // X/Y両方の加速値を計算
+        // シンプルなX/Y軸処理
         int32_t accelerated_x = (dx * factor) / 1000;
-        
-        // X軸の制限を完全に削除（Y軸とのバランスを重視）
-
-        // Y軸の計算を簡素化（一度の計算でスケーリングも適用）
         int32_t accelerated_y = (int32_t)(((int64_t)dy * factor * cfg->y_aspect_scale) / (1000 * 1000));
-        
-        // Y軸の最小感度保証を統一（バランスを重視）
-        if (abs(accelerated_y) < abs(dy)) {
-            accelerated_y = (dy * cfg->y_aspect_scale) / 1000; // スケーリングのみ適用
-        }
         
 
 
@@ -313,13 +277,12 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
             }
         }
 
-        // X/Y両方のイベントを生成してforward
+        // X/Y両方のイベントを確実に送信
         struct input_event out_x = *event;
         out_x.code = INPUT_REL_X;
         out_x.value = accelerated_x;
         int ret_x = input_processor_forward_event(dev, &out_x, param1, param2, state);
         if (ret_x == 1) {
-            // チェーンの最後なので自分でOSに送信
             input_report_rel(dev, INPUT_REL_X, accelerated_x, false, K_NO_WAIT);
         }
 
@@ -330,6 +293,8 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         if (ret_y == 1) {
             input_report_rel(dev, INPUT_REL_Y, accelerated_y, true, K_FOREVER);
         }
+        
+        // printk("PAIR SENT: X=%d, Y=%d\n", accelerated_x, accelerated_y);
 
 
         // 状態クリア
@@ -341,8 +306,54 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         return 1;
     }
 
-    // --- 単独軸処理を完全に削除 ---
-    // すべてのイベントはペア処理で処理されるため、ここには到達しない
+    // --- 単独軸処理（簡素化版） ---
+    
+    // ペンディングデータを保存
+    if (event->code == INPUT_REL_X) {
+        data->pending_x = event->value;
+        data->pending_x_time = current_time;
+        data->has_pending_x = true;
+    } else if (event->code == INPUT_REL_Y) {
+        data->pending_y = event->value;
+        data->pending_y_time = current_time;
+        data->has_pending_y = true;
+    }
+    
+    // 簡単な加速度処理
+    int64_t time_delta = current_time - data->last_time;
+    if (time_delta <= 0) time_delta = 1;
+    if (time_delta > 100) time_delta = 100;
+    
+    uint32_t speed = (abs(event->value) * 1000) / time_delta;
+    uint16_t factor = cfg->min_factor;
+    if (speed > cfg->speed_threshold) {
+        if (speed >= cfg->speed_max) {
+            factor = cfg->max_factor;
+        } else {
+            uint32_t speed_range = cfg->speed_max - cfg->speed_threshold;
+            uint32_t factor_range = cfg->max_factor - cfg->min_factor;
+            uint32_t speed_offset = speed - cfg->speed_threshold;
+            factor = cfg->min_factor + ((factor_range * speed_offset) / speed_range);
+        }
+    }
+    
+    int32_t accelerated_value = (event->value * factor) / 1000;
+    
+    // Y軸の場合はスケーリング適用
+    if (event->code == INPUT_REL_Y) {
+        accelerated_value = (int32_t)(((int64_t)accelerated_value * cfg->y_aspect_scale) / 1000);
+    }
+    
+    // 状態更新
+    data->last_time = current_time;
+    
+    // イベント送信
+    event->value = accelerated_value;
+    int ret = input_processor_forward_event(dev, event, param1, param2, state);
+    if (ret == 1) {
+        input_report_rel(dev, event->code, event->value, true, K_FOREVER);
+    }
+    
     return 0;
     
     // 単独処理でも最近のペンディングデータがあれば疑似ペア処理を試行
