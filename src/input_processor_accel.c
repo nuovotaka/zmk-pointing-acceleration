@@ -232,6 +232,14 @@ static int accel_handle_event(const struct device *dev, struct input_event *even
         // シンプルなペア処理（デバッグ用）
         // printk("PAIR PROCESSING: dx=%d, dy=%d\n", dx, dy);
         
+        // 基本的な時間と速度計算
+        int64_t time_delta = current_time - data->last_time;
+        if (time_delta <= 0) time_delta = 1;
+        if (time_delta > 100) time_delta = 100;
+        
+        uint32_t magnitude = sqrtf((float)dx * dx + (float)dy * dy);
+        uint32_t speed = (magnitude * 1000) / time_delta;
+        
         // 基本的な加速度処理
         uint16_t factor = cfg->min_factor;
         
